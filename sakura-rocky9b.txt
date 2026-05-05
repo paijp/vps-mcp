@@ -269,8 +269,8 @@ firewall-cmd --permanent --add-port=53/tcp
 firewall-cmd --permanent --add-port=3000/tcp
 firewall-cmd --reload
 
-# 11. postfix + メール送信
-dnf install -y postfix mailx
+# 11. postfix + メール送信 (s-nail: RockyLinux9でのmailx代替)
+dnf install -y postfix s-nail
 systemctl enable postfix && systemctl start postfix
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
