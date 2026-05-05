@@ -178,9 +178,13 @@ grep -q 'named.conf.local' /etc/named.conf \
 
 # listen-onをanyに変更（デフォルトは127.0.0.1のみで外部から到達不可）
 sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf
-# listen-on行が存在しない場合は追加
 grep -q 'listen-on port 53' /etc/named.conf \
   || sed -i '/^options/a\\\tlisten-on port 53 { any; };' /etc/named.conf
+
+# allow-queryをanyに変更（デフォルトはlocalhostのみで外部からの問い合わせ不可）
+sed -i 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' /etc/named.conf
+grep -q 'allow-query' /etc/named.conf \
+  || sed -i '/^options/a\\\tallow-query { any; };' /etc/named.conf
 
 systemctl enable named && systemctl start named
 
@@ -241,7 +245,6 @@ systemctl enable nginx && systemctl start nginx
 nginx -t && systemctl reload nginx
 
 # 9. SSL
-# deploy hook: 証明書更新後にNginxを自動reload（90日ごとの自動更新時も有効）
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
 cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
 #!/bin/bash
