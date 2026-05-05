@@ -271,6 +271,7 @@ firewall-cmd --reload
 
 # 11. postfix + メール送信 (s-nail: RockyLinux9でのmailx代替)
 dnf install -y postfix s-nail
+postconf -e 'inet_protocols = ipv4'
 systemctl enable postfix && systemctl start postfix
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
