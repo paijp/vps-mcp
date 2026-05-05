@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude.ai MCP サーバー構築 for さくらのVPS (RockyLinux)
-# パラメータ: DOMAIN / LETSENCRYPT_EMAIL / MCP_API_KEY / NS1_IP
+# パラメータ: DOMAIN / LETSENCRYPT_EMAIL / MCP_API_KEY
 set -euo pipefail
 
 DOMAIN=@@@DOMAIN@@@
@@ -80,7 +80,13 @@ function createMcpServer() {
         const out = execSync(command, { timeout: 30000, maxBuffer: 1024*1024, encoding: "utf8" });
         return { content: [{ type: "text", text: out || "(出力なし)" }] };
       } catch (e) {
-        return { content: [{ type: "text", text: "エラー: " + e.message }], isError: true };
+        const isTimeout = e.code === "ETIMEDOUT" || e.signal === "SIGTERM";
+        const msg = [
+          isTimeout ? "タイムアウト（30秒超過）" : e.message,
+          e.stdout ? "stdout: " + e.stdout : "",
+          e.stderr ? "stderr: " + e.stderr : "",
+        ].filter(Boolean).join("\n");
+        return { content: [{ type: "text", text: "エラー: " + msg }], isError: true };
       }
     }
   );
@@ -208,8 +214,10 @@ EOF
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
 # 8. Nginx
+# log_formatはhttpブロックに書く必要があるためnginx.confに追加
+sed -i '/http {/a\    log_format mcp_masked '\''$remote_addr - [$time_local] "$request_method $uri" $status'\''\;' /etc/nginx/nginx.conf
+
 cat > /etc/nginx/conf.d/mcp.conf << EOF
-log_format mcp_masked '\$remote_addr - [\$time_local] "\$request_method \$uri" \$status';
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -269,7 +277,7 @@ firewall-cmd --permanent --add-port=53/tcp
 firewall-cmd --permanent --add-port=3000/tcp
 firewall-cmd --reload
 
-# 11. postfix + メール送信 (s-nail: RockyLinux9でのmailx代替)
+# 11. postfix + メール送信
 dnf install -y postfix s-nail
 postconf -e 'inet_protocols = ipv4'
 systemctl enable postfix && systemctl start postfix
