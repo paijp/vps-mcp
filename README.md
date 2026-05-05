@@ -28,7 +28,12 @@
 | `DOMAIN` | ドメイン名 | `example.com` |
 | `LETSENCRYPT_EMAIL` | Let's Encrypt 通知メール | `you@example.com` |
 | `MCP_API_KEY` | MCP認証キー（32文字以上推奨） | （任意の文字列） |
-| `NS1_IP` | このVPS自身のIPアドレス | `153.126.xxx.xxx` |
+| `NS1_IP` | このVPSのグローバルIPアドレス | `153.126.xxx.xxx` |
+
+### NS1_IP について
+
+VPSのグローバルIPアドレスをゾーンファイルの `@ IN A` および `ns1 IN A`（グルーレコード）に使用します。
+`curl ifconfig.me` で自動取得することも可能ですが、複数NICがある場合にプライベートIPが取得されることがあるため、さくらのコントロールパネルで確認したグローバルIPを明示的に指定しています。
 
 ## claude.ai への登録
 
@@ -57,11 +62,32 @@ URL: https://<DOMAIN>/mcp/<MCP_API_KEY>/sse
      --non-interactive --agree-tos --email <EMAIL> -d <DOMAIN>
    ```
 
+## SSL証明書の自動更新について
+
+`certbot certonly` で取得した証明書は、certbotが `/etc/cron.d/certbot` または systemdタイマー（`certbot-renew.timer`）を自動登録するため、**90日ごとに自動更新されます**。
+
+ただし `certbot certonly` はNginxへの反映（reload）を自動で行いません。以下のdeploy hookを設定してください：
+
+```bash
+cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'EOF'
+#!/bin/bash
+systemctl reload nginx
+EOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+```
+
+更新動作の確認：
+```bash
+certbot renew --dry-run
+```
+
 ## ゾーン転送について
 
 さくらのセカンダリDNSからのゾーン転送元IPは固定です：
 - `210.188.224.9`
 - `210.224.172.13`
+
+参考: [さくらのサポート - ゾーン情報を編集したい](https://help.sakura.ad.jp/domain/2302/)
 
 ## セキュリティ注意事項
 
