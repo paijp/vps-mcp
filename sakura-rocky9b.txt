@@ -167,8 +167,8 @@ key "certbot-key" {
 zone "${DOMAIN}" {
     type master;
     file "/var/named/${DOMAIN}.zone";
-    allow-transfer { 210.188.224.9; 210.224.172.13; };
-    also-notify  { 210.188.224.9; 210.224.172.13; };
+    allow-transfer { 210.188.224.9; 210.224.172.13; }; // さくらゾーン転送元
+    also-notify   { 61.211.236.1; 133.167.21.1; };    // ns1/ns2.dns.ne.jp
     update-policy { grant certbot-key name _acme-challenge.${DOMAIN}. TXT; };
 };
 NAMEDEOF
@@ -271,6 +271,7 @@ firewall-cmd --permanent --add-service=ssh
 firewall-cmd --permanent --add-service=http
 firewall-cmd --permanent --add-service=https
 firewall-cmd --permanent --add-port=53/udp
+firewall-cmd --permanent --add-port=53/tcp
 firewall-cmd --permanent --add-port=3000/tcp
 firewall-cmd --reload
 
