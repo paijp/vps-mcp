@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude.ai MCP サーバー構築 for さくらのVPS (RockyLinux)
-# パラメータ: DOMAIN / LETSENCRYPT_EMAIL / MCP_API_KEY
+# パラメータ: DOMAIN / LETSENCRYPT_EMAIL / MCP_API_KEY / NS1_IP
 set -euo pipefail
 
 DOMAIN=@@@DOMAIN@@@
@@ -144,7 +144,6 @@ MCPEOF
 SERIAL=$(date +%Y%m%d01)
 mkdir -p /etc/named /etc/certbot
 
-# ゾーンファイル
 cat > /var/named/${DOMAIN}.zone << ZONEOF
 \$TTL 3600
 @ IN SOA ns1.${DOMAIN}. admin.${DOMAIN}. (
@@ -157,11 +156,9 @@ ns1 IN A ${NS1_IP}
 ZONEOF
 chown named:named /var/named/${DOMAIN}.zone
 
-# TSIGキー生成
 tsig-keygen -a hmac-sha256 certbot-key > /etc/named/certbot.key
 TSIG_SECRET=$(grep secret /etc/named/certbot.key | awk '{print $2}' | tr -d '";')
 
-# named.conf.local
 cat > /etc/named/named.conf.local << NAMEDEOF
 key "certbot-key" {
     algorithm hmac-sha256;
@@ -181,7 +178,6 @@ grep -q 'named.conf.local' /etc/named.conf \
 
 systemctl enable named && systemctl start named
 
-# certbot rfc2136認証情報
 cat > /etc/certbot/rfc2136.ini << CREDEOF
 dns_rfc2136_server = 127.0.0.1
 dns_rfc2136_port = 53
@@ -238,7 +234,15 @@ EOF
 systemctl enable nginx && systemctl start nginx
 nginx -t && systemctl reload nginx
 
-# 9. SSL (certbot DNS-01 via RFC2136)
+# 9. SSL
+# deploy hook: 証明書更新後にNginxを自動reload（90日ごとの自動更新時も有効）
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
+#!/bin/bash
+systemctl reload nginx
+HOOKEOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
 DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
 if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
@@ -246,9 +250,10 @@ if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
         --dns-rfc2136-credentials /etc/certbot/rfc2136.ini \
         --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL" \
         -d "$DOMAIN" && echo "SSL取得完了" \
-    || echo "SSL取得失敗 → 後で手動実行"
+    || echo "SSL取得失敗 → 後で手動実行してください"
 else
     echo "DNS未一致のためSSLスキップ（VPS:${VPS_IP} / DNS:${DOMAIN_IP}）"
+    echo "一致後に実行: certbot certonly --dns-rfc2136 --dns-rfc2136-credentials /etc/certbot/rfc2136.ini --non-interactive --agree-tos --email ${LETSENCRYPT_EMAIL} -d ${DOMAIN}"
 fi
 
 # 10. firewalld
@@ -264,5 +269,5 @@ VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
 echo "IP: ${VPS_IP} / DOMAIN: ${DOMAIN}"
 echo "claude.ai設定: URL=https://${DOMAIN}/mcp/${MCP_API_KEY}/sse"
-echo "さくらDNS設定: コントロールパネル → セカンダリDNS → プライマリ: ${VPS_IP}"
-echo "グルーレコード: ns1.${DOMAIN} → ${VPS_IP} をレジストラに登録してください"
+echo "さくらDNS設定: コントロールパネル → セカンダリDNS → プライマリ: ${NS1_IP}"
+echo "グルーレコード: ns1.${DOMAIN} → ${NS1_IP} をレジストラに登録してください"
