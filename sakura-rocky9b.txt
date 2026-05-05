@@ -176,6 +176,12 @@ NAMEDEOF
 grep -q 'named.conf.local' /etc/named.conf \
   || echo 'include "/etc/named/named.conf.local";' >> /etc/named.conf
 
+# listen-onをanyに変更（デフォルトは127.0.0.1のみで外部から到達不可）
+sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf
+# listen-on行が存在しない場合は追加
+grep -q 'listen-on port 53' /etc/named.conf \
+  || sed -i '/^options/a\\\tlisten-on port 53 { any; };' /etc/named.conf
+
 systemctl enable named && systemctl start named
 
 cat > /etc/certbot/rfc2136.ini << CREDEOF
