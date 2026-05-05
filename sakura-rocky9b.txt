@@ -186,12 +186,12 @@ grep -q 'allow-query' /etc/named.conf \
 
 systemctl enable named && systemctl start named
 
-# ゾーン転送のためnotify送信・60秒待機
+# ゾーン転送のためnotify送信・300秒待機
 sleep 10
 rndc querylog on
 rndc notify "${DOMAIN}" && echo "notify送信完了"
-echo "ゾーン転送待機中（60秒）..."
-sleep 60
+echo "ゾーン転送待機中（300秒）..."
+sleep 300
 journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || echo "ゾーン転送ログなし"
 
 cat > /etc/certbot/rfc2136.ini << CREDEOF
