@@ -23,7 +23,7 @@ echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 dnf update -y
 dnf config-manager --enable crb
 dnf install -y curl nginx epel-release bind-utils bind
-dnf install -y certbot python3-certbot-nginx python3-certbot-dns-rfc2136
+dnf install -y certbot python3-certbot-nginx
 
 # 3. Node.js 20
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
@@ -142,7 +142,7 @@ MCPEOF
 
 # 5. BIND (プライマリDNS)
 SERIAL=$(date +%Y%m%d01)
-mkdir -p /etc/named /etc/certbot
+mkdir -p /etc/named
 
 cat > /var/named/${DOMAIN}.zone << ZONEOF
 \$TTL 3600
@@ -156,20 +156,12 @@ ns1 IN A ${NS1_IP}
 ZONEOF
 chown named:named /var/named/${DOMAIN}.zone
 
-tsig-keygen -a hmac-sha256 certbot-key > /etc/named/certbot.key
-TSIG_SECRET=$(grep secret /etc/named/certbot.key | awk '{print $2}' | tr -d '";')
-
 cat > /etc/named/named.conf.local << NAMEDEOF
-key "certbot-key" {
-    algorithm hmac-sha256;
-    secret "${TSIG_SECRET}";
-};
 zone "${DOMAIN}" {
     type master;
     file "/var/named/${DOMAIN}.zone";
-    allow-transfer { 210.188.224.9; 210.224.172.13; }; // さくらゾーン転送元
-    also-notify   { 61.211.236.1; 133.167.21.1; };    // ns1/ns2.dns.ne.jp
-    update-policy { grant certbot-key name _acme-challenge.${DOMAIN}. TXT; };
+    allow-transfer { 210.188.224.9; 210.224.172.13; };
+    also-notify   { 61.211.236.1; 133.167.21.1; };
 };
 NAMEDEOF
 
@@ -193,15 +185,6 @@ rndc notify "${DOMAIN}" && echo "notify送信完了"
 echo "ゾーン転送待機中（300秒）..."
 sleep 300
 journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || echo "ゾーン転送ログなし"
-
-cat > /etc/certbot/rfc2136.ini << CREDEOF
-dns_rfc2136_server = 127.0.0.1
-dns_rfc2136_port = 53
-dns_rfc2136_name = certbot-key
-dns_rfc2136_secret = ${TSIG_SECRET}
-dns_rfc2136_algorithm = HMAC-SHA256
-CREDEOF
-chmod 600 /etc/certbot/rfc2136.ini
 
 # 6. npm install
 cd "$MCP_DIR" && npm install --production
@@ -230,7 +213,6 @@ systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-se
 # 8. Nginx
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 log_format mcp_masked '\$remote_addr - [\$time_local] "\$request_method \$uri" \$status';
-
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -250,7 +232,7 @@ EOF
 systemctl enable nginx && systemctl start nginx
 nginx -t && systemctl reload nginx
 
-# 9. SSL
+# 9. SSL (HTTP-01)
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
 cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
 #!/bin/bash
@@ -261,14 +243,12 @@ chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
 DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
 if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
-    certbot certonly --dns-rfc2136 \
-        --dns-rfc2136-credentials /etc/certbot/rfc2136.ini \
-        --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL" \
-        -d "$DOMAIN" && echo "SSL取得完了" \
-    || echo "SSL取得失敗 → 後で手動実行してください"
+    certbot --nginx --non-interactive --agree-tos \
+        --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" \
+        && echo "SSL取得完了" \
+        || echo "SSL取得失敗"
 else
     echo "DNS未一致のためSSLスキップ（VPS:${VPS_IP} / DNS:${DOMAIN_IP}）"
-    echo "一致後に実行: certbot certonly --dns-rfc2136 --dns-rfc2136-credentials /etc/certbot/rfc2136.ini --non-interactive --agree-tos --email ${LETSENCRYPT_EMAIL} -d ${DOMAIN}"
 fi
 
 # 10. firewalld
@@ -281,9 +261,12 @@ firewall-cmd --permanent --add-port=53/tcp
 firewall-cmd --permanent --add-port=3000/tcp
 firewall-cmd --reload
 
+# 11. postfix + メール送信
+dnf install -y postfix mailx
+systemctl enable postfix && systemctl start postfix
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
 echo "IP: ${VPS_IP} / DOMAIN: ${DOMAIN}"
 echo "claude.ai設定: URL=https://${DOMAIN}/mcp/${MCP_API_KEY}/sse"
-echo "さくらDNS設定: コントロールパネル → セカンダリDNS → プライマリ: ${NS1_IP}"
-echo "グルーレコード: ns1.${DOMAIN} → ${NS1_IP} をレジストラに登録してください"
+tail -50 /var/log/mcp-startup.log \
+    | mail -s "VPS startup: ${DOMAIN}" "$LETSENCRYPT_EMAIL"
