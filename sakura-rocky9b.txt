@@ -176,17 +176,22 @@ NAMEDEOF
 grep -q 'named.conf.local' /etc/named.conf \
   || echo 'include "/etc/named/named.conf.local";' >> /etc/named.conf
 
-# listen-onをanyに変更（デフォルトは127.0.0.1のみで外部から到達不可）
 sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf
 grep -q 'listen-on port 53' /etc/named.conf \
   || sed -i '/^options/a\\\tlisten-on port 53 { any; };' /etc/named.conf
 
-# allow-queryをanyに変更（デフォルトはlocalhostのみで外部からの問い合わせ不可）
 sed -i 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' /etc/named.conf
 grep -q 'allow-query' /etc/named.conf \
   || sed -i '/^options/a\\\tallow-query { any; };' /etc/named.conf
 
 systemctl enable named && systemctl start named
+
+# notify送信・60秒待機後にスクリプト続行
+sleep 10
+rndc notify "${DOMAIN}" && echo "notify送信完了"
+echo "ゾーン転送待機中（60秒）..."
+sleep 60
+journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || echo "ゾーン転送ログなし"
 
 cat > /etc/certbot/rfc2136.ini << CREDEOF
 dns_rfc2136_server = 127.0.0.1
