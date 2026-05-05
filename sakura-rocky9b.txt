@@ -241,14 +241,25 @@ HOOKEOF
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
-DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
+echo "DNS解決待機中（最大30分・1分間隔）..."
+DOMAIN_IP=""
+for i in $(seq 1 30); do
+    DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
+    if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
+        echo "DNS解決確認（${i}回目）: ${DOMAIN_IP}"
+        break
+    fi
+    echo "${i}回目: 未解決（VPS:${VPS_IP} / DNS:${DOMAIN_IP}）"
+    sleep 60
+done
+
 if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
     certbot --nginx --non-interactive --agree-tos \
         --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" \
         && echo "SSL取得完了" \
         || echo "SSL取得失敗"
 else
-    echo "DNS未一致のためSSLスキップ（VPS:${VPS_IP} / DNS:${DOMAIN_IP}）"
+    echo "DNS未解決のためSSLスキップ（30分タイムアウト）"
 fi
 
 # 10. firewalld
