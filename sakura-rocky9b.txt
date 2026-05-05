@@ -24,6 +24,9 @@ dnf update -y
 dnf config-manager --enable crb
 dnf install -y curl nginx epel-release bind-utils bind
 dnf install -y certbot python3-certbot-nginx
+dnf install -y postfix s-nail
+postconf -e 'inet_protocols = ipv4'
+systemctl enable postfix && systemctl start postfix
 
 # 3. Node.js 20
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
@@ -277,10 +280,7 @@ firewall-cmd --permanent --add-port=53/tcp
 firewall-cmd --permanent --add-port=3000/tcp
 firewall-cmd --reload
 
-# 11. postfix + メール送信
-dnf install -y postfix s-nail
-postconf -e 'inet_protocols = ipv4'
-systemctl enable postfix && systemctl start postfix
+# 11. メール送信
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
 echo "IP: ${VPS_IP} / DOMAIN: ${DOMAIN}"
