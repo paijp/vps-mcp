@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude.ai MCP サーバー構築 for さくらのVPS (RockyLinux)
-# パラメータ: DOMAIN / LETSENCRYPT_EMAIL / MCP_API_KEY
+# パラメータ: DOMAIN / LETSENCRYPT_EMAIL / MCP_API_KEY / NS1_IP
 set -euo pipefail
 
 DOMAIN=@@@DOMAIN@@@
@@ -298,6 +298,7 @@ firewall-cmd --reload
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
 echo "IP: ${VPS_IP} / DOMAIN: ${DOMAIN}"
-echo "claude.ai設定: URL=https://${DOMAIN}/mcp/${MCP_API_KEY}/sse"
+echo "claude.ai設定: URL=https://${DOMAIN}/mcp/<MCP_API_KEY>/sse"
 tail -50 /var/log/mcp-startup.log \
+    | grep -v 'MCP_API_KEY\|claude.ai設定' \
     | mail -s "VPS startup: ${DOMAIN}" "$LETSENCRYPT_EMAIL"
