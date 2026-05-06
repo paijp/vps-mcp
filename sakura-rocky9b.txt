@@ -76,7 +76,7 @@ function createMcpServer() {
 
   server.tool(
     "exec_command",
-    "VPS上でシェルコマンドを実行する（root権限）",
+    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。",
     { command: z.string() },
     async ({ command }) => {
       try {
@@ -91,6 +91,21 @@ function createMcpServer() {
         ].filter(Boolean).join("\n");
         return { content: [{ type: "text", text: "エラー: " + msg }], isError: true };
       }
+    }
+  );
+
+  server.tool(
+    "nginx_reload",
+    "Nginxをリロードする専用ツール。nginx reload/restartは必ずこれを使うこと、2秒後SSEセッションが切断されるので再接続が必要。",
+    {},
+    async () => {
+      try {
+        execSync("nginx -t", { encoding: "utf8" });
+      } catch (e) {
+        return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
+      }
+      setTimeout(() => execSync("nginx -s reload"), 2000);
+      return { content: [{ type: "text", text: "nginx設定テストOK、2秒後reload。SSEセッションが切断されるので再接続してください。" }] };
     }
   );
 
@@ -149,7 +164,7 @@ app.post("/mcp/:key/messages", auth, async (req, res) => {
 app.listen(PORT, "127.0.0.1", () => console.log(`MCP listening on ${PORT}`));
 MCPEOF
 
-# 5. BIND (プライマリDNS)
+# 5. BIND
 SERIAL=$(date +%Y%m%d01)
 mkdir -p /etc/named
 
@@ -217,7 +232,6 @@ EOF
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
 # 8. Nginx
-# log_formatはhttpブロックに書く必要があるためnginx.confに追加
 sed -i '/http {/a\    log_format mcp_masked '\''$remote_addr - [$time_local] "$request_method $uri" $status'\''\;' /etc/nginx/nginx.conf
 
 cat > /etc/nginx/conf.d/mcp.conf << EOF
