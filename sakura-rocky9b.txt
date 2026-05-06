@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude.ai MCP サーバー構築 for さくらのVPS (RockyLinux)
-# パラメータ: DOMAIN / LETSENCRYPT_EMAIL / MCP_API_KEY / NS1_IP
+# パラメータ: DOMAIN / LETSENCRYPT_EMAIL / MCP_API_KEY
 set -euo pipefail
 
 DOMAIN=@@@DOMAIN@@@
@@ -54,8 +54,8 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
-import { execSync } from "child_process";
-import { readFileSync, writeFileSync } from "fs";
+import { exec } from "child_process";
+import { readFile, writeFile } from "fs/promises";
 
 const API_KEY = process.env.MCP_API_KEY;
 const PORT = parseInt(process.env.MCP_PORT || "3000");
@@ -69,6 +69,15 @@ function auth(req, res, next) {
   next();
 }
 
+function run(cmd, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { timeout, maxBuffer: 1024*1024 }, (err, stdout, stderr) => {
+      if (err) { err.stdout = stdout; err.stderr = stderr; reject(err); }
+      else resolve(stdout);
+    });
+  });
+}
+
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
 function createMcpServer() {
@@ -80,10 +89,10 @@ function createMcpServer() {
     { command: z.string() },
     async ({ command }) => {
       try {
-        const out = execSync(command, { timeout: 30000, maxBuffer: 1024*1024, encoding: "utf8" });
+        const out = await run(command);
         return { content: [{ type: "text", text: out || "(出力なし)" }] };
       } catch (e) {
-        const isTimeout = e.code === "ETIMEDOUT" || e.signal === "SIGTERM";
+        const isTimeout = e.killed || e.code === "ETIMEDOUT";
         const msg = [
           isTimeout ? "タイムアウト（30秒超過）" : e.message,
           e.stdout ? "stdout: " + e.stdout : "",
@@ -100,11 +109,11 @@ function createMcpServer() {
     {},
     async () => {
       try {
-        execSync("nginx -t", { encoding: "utf8" });
+        await run("nginx -t");
       } catch (e) {
         return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
       }
-      setTimeout(() => execSync("nginx -s reload"), 2000);
+      setTimeout(() => run("nginx -s reload"), 2000);
       return { content: [{ type: "text", text: "nginx設定テストOK、2秒後reload。SSEセッションが切断されるので再接続してください。" }] };
     }
   );
@@ -115,7 +124,7 @@ function createMcpServer() {
     { path: z.string() },
     async ({ path }) => {
       try {
-        return { content: [{ type: "text", text: readFileSync(path, "utf8") }] };
+        return { content: [{ type: "text", text: await readFile(path, "utf8") }] };
       } catch (e) {
         return { content: [{ type: "text", text: "エラー: " + e.message }], isError: true };
       }
@@ -128,7 +137,7 @@ function createMcpServer() {
     { path: z.string(), content: z.string() },
     async ({ path, content }) => {
       try {
-        writeFileSync(path, content, "utf8");
+        await writeFile(path, content, "utf8");
         return { content: [{ type: "text", text: "書き込み完了: " + path }] };
       } catch (e) {
         return { content: [{ type: "text", text: "エラー: " + e.message }], isError: true };
@@ -205,9 +214,9 @@ systemctl enable named && systemctl start named
 sleep 10
 rndc querylog on
 rndc notify "${DOMAIN}" && echo "notify送信完了"
-journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || echo "ゾーン転送ログなし"
+journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || true
 
-# 6. npm install
+# 6. npm
 cd "$MCP_DIR" && npm install --production
 
 # 7. systemd
@@ -254,7 +263,7 @@ EOF
 systemctl enable nginx && systemctl start nginx
 nginx -t && systemctl reload nginx
 
-# 9. SSL (HTTP-01)
+# 9. SSL
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
 cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
 #!/bin/bash
@@ -294,7 +303,6 @@ firewall-cmd --permanent --add-port=53/tcp
 firewall-cmd --permanent --add-port=3000/tcp
 firewall-cmd --reload
 
-# 11. メール送信
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
 echo "IP: ${VPS_IP} / DOMAIN: ${DOMAIN}"
