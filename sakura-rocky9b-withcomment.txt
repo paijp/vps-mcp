@@ -6,11 +6,11 @@
 #   1. swapfile 1GB
 #   2. パッケージ（nginx/bind/certbot/postfix）
 #   3. Node.js 20
-#   4. MCPサーバー (exec_command/nginx_reload/read_file/write_file)
+#   4. MCPサーバー (exec_command/nginx_reload)
 #   5. BIND プライマリDNS（allow-recursionでオープンリゾルバ防止）
 #   6. npm install
 #   7. systemdサービス
-#   8. Nginx（log_formatはhttpblockに追加）
+#   8. Nginx（log_formatはhttpブロックに追加）
 #   9. SSL: DNS解決を最大30分待機しcertbot実行
 #  10. firewalld
 #  11. スタートアップログをメール送信
@@ -67,8 +67,7 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
-import { exec } from "child_process";          // 非同期: イベントループをブロックしない
-import { readFile, writeFile } from "fs/promises";
+import { exec } from "child_process";  // 非同期: イベントループをブロックしない
 
 const API_KEY = process.env.MCP_API_KEY;
 const PORT = parseInt(process.env.MCP_PORT || "3000");
@@ -125,41 +124,12 @@ function createMcpServer() {
     {},
     async () => {
       try {
-        await run("nginx -t");  // 設定テスト先に実行
+        await run("nginx -t");  // 設定テストを先に実行
       } catch (e) {
         return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
       }
       setTimeout(() => run("nginx -s reload"), 2000);  // 2秒後に実行
       return { content: [{ type: "text", text: "nginx設定テストOK、2秒後reload。SSEセッションが切断されるので再接続してください。" }] };
-    }
-  );
-
-  // ツール3: ファイル読み込み
-  server.tool(
-    "read_file",
-    "VPS上のファイルを読み込む",
-    { path: z.string() },
-    async ({ path }) => {
-      try {
-        return { content: [{ type: "text", text: await readFile(path, "utf8") }] };
-      } catch (e) {
-        return { content: [{ type: "text", text: "エラー: " + e.message }], isError: true };
-      }
-    }
-  );
-
-  // ツール4: ファイル書き込み
-  server.tool(
-    "write_file",
-    "VPS上のファイルに内容を書き込む（上書き）",
-    { path: z.string(), content: z.string() },
-    async ({ path, content }) => {
-      try {
-        await writeFile(path, content, "utf8");
-        return { content: [{ type: "text", text: "書き込み完了: " + path }] };
-      } catch (e) {
-        return { content: [{ type: "text", text: "エラー: " + e.message }], isError: true };
-      }
     }
   );
 
@@ -266,7 +236,7 @@ EOF
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
 # 8. Nginx
-# log_formatはhttpblockに必要（server blockに書くと他のconf.dから参照不可）
+# log_formatはhttpブロックに書く必要がある（server blockに書くと他のconf.dから参照不可）
 sed -i '/http {/a\    log_format mcp_masked '\''$remote_addr - [$time_local] "$request_method $uri" $status'\''\;' /etc/nginx/nginx.conf
 
 cat > /etc/nginx/conf.d/mcp.conf << EOF
@@ -289,7 +259,7 @@ EOF
 systemctl enable nginx && systemctl start nginx
 nginx -t && systemctl reload nginx
 
-# 9. SSL (HTTP-01方式。DNS被覆待機しcertbot実行)
+# 9. SSL (HTTP-01方式。DNS解決を最大30分待機しcertbot実行)
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
 cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
 #!/bin/bash
@@ -321,15 +291,11 @@ fi
 
 # 10. firewalld
 systemctl enable firewalld && systemctl start firewalld
-firewall-cmd --permanent --add-service=ssh
-firewall-cmd --permanent --add-service=http
-firewall-cmd --permanent --add-service=https
-firewall-cmd --permanent --add-port=53/udp  # DNS UDP
-firewall-cmd --permanent --add-port=53/tcp  # DNS TCP (AXFR用)
-firewall-cmd --permanent --add-port=3000/tcp  # MCP直接アクセス用
+for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
+for X in 53/udp 53/tcp 3000/tcp; do firewall-cmd --permanent --add-port=$X; done
 firewall-cmd --reload
 
-# 11. スタートアップログをメール送信（certbot結果を確認するため）
+# 11. スタートアップログをメール送信（certbot結果確認用）
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
 echo "IP: ${VPS_IP} / DOMAIN: ${DOMAIN}"
