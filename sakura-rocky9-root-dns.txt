@@ -207,13 +207,19 @@ WorkingDirectory=${MCP_DIR}
 ExecStart=/usr/bin/node ${MCP_DIR}/index.mjs
 Restart=always
 RestartSec=5
-Environment=MCP_API_KEY=${MCP_API_KEY}
-Environment=MCP_PORT=${MCP_PORT}
+EnvironmentFile=/etc/mcp-server/env
 StandardOutput=append:/var/log/mcp-server.log
 StandardError=append:/var/log/mcp-server.log
 [Install]
 WantedBy=multi-user.target
 EOF
+
+mkdir -p /etc/mcp-server
+cat > /etc/mcp-server/env << EOF
+MCP_API_KEY=${MCP_API_KEY}
+MCP_PORT=${MCP_PORT}
+EOF
+chmod 600 /etc/mcp-server/env
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
 # 8. Nginx
@@ -225,7 +231,7 @@ server {
     server_name ${DOMAIN};
     location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
     location ~ ^/mcp/[^/]+/(sse|messages) {
-        access_log /var/log/nginx/mcp_access.log mcp_masked;
+        access_log off;
         proxy_pass http://127.0.0.1:${MCP_PORT};
         proxy_http_version 1.1;
         proxy_buffering off;
