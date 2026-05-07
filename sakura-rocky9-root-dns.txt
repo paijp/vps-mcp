@@ -287,7 +287,7 @@ cat > /etc/systemd/system/weekly-reboot.timer << 'EOF'
 Description=Weekly reboot
 [Timer]
 OnCalendar=Sun 03:00
-Persistent=true
+Persistent=false
 [Install]
 WantedBy=timers.target
 EOF
