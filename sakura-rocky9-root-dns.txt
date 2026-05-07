@@ -1,0 +1,271 @@
+#!/bin/bash
+set -euo pipefail
+
+DOMAIN=@@@DOMAIN@@@
+LETSENCRYPT_EMAIL=@@@LETSENCRYPT_EMAIL@@@
+MCP_API_KEY=@@@MCP_API_KEY@@@
+MCP_PORT=3000
+NS1_IP=@@@NS1_IP@@@
+
+exec > >(tee -a /var/log/mcp-startup.log) 2>&1
+echo "===== Setup Start: $(date) ====="
+
+fallocate -l 1G /swapfile
+chmod og-rwx /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
+
+dnf update -y
+dnf config-manager --enable crb
+dnf install -y curl nginx epel-release bind-utils bind
+dnf install -y certbot python3-certbot-nginx
+dnf install -y postfix s-nail
+postconf -e 'inet_protocols = ipv4'
+systemctl enable postfix && systemctl start postfix
+
+curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+dnf install -y nodejs
+
+MCP_DIR="/opt/mcp-server"
+mkdir -p "$MCP_DIR"
+
+cat > "$MCP_DIR/package.json" << 'EOF'
+{
+  "name": "vps-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^4.18.0",
+    "zod": "^3.22.0"
+  }
+}
+EOF
+
+cat > "$MCP_DIR/index.mjs" << 'MCPEOF'
+import express from "express";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { z } from "zod";
+import { exec } from "child_process";
+
+const API_KEY = process.env.MCP_API_KEY;
+const PORT = parseInt(process.env.MCP_PORT || "3000");
+
+const app = express();
+app.use(express.json());
+
+function auth(req, res, next) {
+  const key = req.params.key || req.query.key || "";
+  if (!API_KEY || key !== API_KEY) return res.status(401).json({ error: "Unauthorized" });
+  next();
+}
+
+function run(cmd, timeout = 30000) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { timeout, maxBuffer: 1024*1024 }, (err, stdout, stderr) => {
+      if (err) { err.stdout = stdout; err.stderr = stderr; reject(err); }
+      else resolve(stdout);
+    });
+  });
+}
+
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
+
+function createMcpServer() {
+  const server = new McpServer({ name: "sakura-vps", version: "1.0.0" });
+
+  server.tool(
+    "exec_command",
+    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。",
+    { command: z.string() },
+    async ({ command }) => {
+      try {
+        const out = await run(command);
+        return { content: [{ type: "text", text: out || "(出力なし)" }] };
+      } catch (e) {
+        const isTimeout = e.killed || e.code === "ETIMEDOUT";
+        const msg = [
+          isTimeout ? "タイムアウト（30秒超過）" : e.message,
+          e.stdout ? "stdout: " + e.stdout : "",
+          e.stderr ? "stderr: " + e.stderr : "",
+        ].filter(Boolean).join("\n");
+        return { content: [{ type: "text", text: "エラー: " + msg }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "nginx_reload",
+    "Nginxをリロードする専用ツール。nginx reload/restartは必ずこれを使うこと、2秒後SSEセッションが切断されるので再接続が必要。",
+    {},
+    async () => {
+      try {
+        await run("nginx -t");
+      } catch (e) {
+        return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
+      }
+      setTimeout(() => run("nginx -s reload"), 2000);
+      return { content: [{ type: "text", text: "nginx設定テストOK、2秒後reload。SSEセッションが切断されるので再接続してください。" }] };
+    }
+  );
+
+  return server;
+}
+
+const transports = new Map();
+
+app.get("/mcp/:key/sse", auth, async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  const server = createMcpServer();
+  const transport = new SSEServerTransport(`/mcp/${req.params.key}/messages`, res);
+  transports.set(transport.sessionId, transport);
+  await server.connect(transport);
+  req.on("close", () => {
+    transports.delete(transport.sessionId);
+    transport.close();
+  });
+});
+
+app.post("/mcp/:key/messages", auth, async (req, res) => {
+  const transport = transports.get(req.query.sessionId);
+  if (!transport) return res.status(404).json({ error: "Session not found" });
+  await transport.handlePostMessage(req, res, req.body);
+});
+
+app.listen(PORT, "127.0.0.1", () => console.log(`MCP listening on ${PORT}`));
+MCPEOF
+
+SERIAL=$(date +%Y%m%d01)
+mkdir -p /etc/named
+
+cat > /var/named/${DOMAIN}.zone << ZONEOF
+\$TTL 3600
+@ IN SOA ns1.${DOMAIN}. admin.${DOMAIN}. (
+    ${SERIAL} 3600 900 604800 300 )
+@ IN NS ns1.${DOMAIN}.
+@ IN NS ns1.dns.ne.jp.
+@ IN NS ns2.dns.ne.jp.
+@ IN A  ${NS1_IP}
+ns1 IN A ${NS1_IP}
+ZONEOF
+chown named:named /var/named/${DOMAIN}.zone
+
+cat > /etc/named/named.conf.local << NAMEDEOF
+zone "${DOMAIN}" {
+    type master;
+    file "/var/named/${DOMAIN}.zone";
+    allow-transfer { 210.188.224.9; 210.224.172.13; };
+    also-notify   { 61.211.236.1; 133.167.21.1; };
+};
+NAMEDEOF
+
+grep -q 'named.conf.local' /etc/named.conf \
+  || echo 'include "/etc/named/named.conf.local";' >> /etc/named.conf
+
+sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf
+grep -q 'listen-on port 53' /etc/named.conf \
+  || sed -i '/^options/a\\tlisten-on port 53 { any; };' /etc/named.conf
+
+sed -i 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' /etc/named.conf
+grep -q 'allow-query' /etc/named.conf \
+  || sed -i '/^options/a\\tallow-query { any; };' /etc/named.conf
+
+grep -q 'allow-recursion' /etc/named.conf \
+  || sed -i '/^options/a\\tallow-recursion { 127.0.0.1; };' /etc/named.conf
+
+systemctl enable named && systemctl start named
+
+sleep 10
+rndc querylog on
+rndc notify "${DOMAIN}" && echo "notify送信完了"
+journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || true
+
+cd "$MCP_DIR" && npm install --production
+
+cat > /etc/systemd/system/mcp-server.service << EOF
+[Unit]
+Description=Claude.ai MCP Server
+After=network.target
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${MCP_DIR}
+ExecStart=/usr/bin/node ${MCP_DIR}/index.mjs
+Restart=always
+RestartSec=5
+Environment=MCP_API_KEY=${MCP_API_KEY}
+Environment=MCP_PORT=${MCP_PORT}
+StandardOutput=append:/var/log/mcp-server.log
+StandardError=append:/var/log/mcp-server.log
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
+
+sed -i '/http {/a\    log_format mcp_masked '\''$remote_addr - [$time_local] "$request_method $uri" $status'\''\;' /etc/nginx/nginx.conf
+
+cat > /etc/nginx/conf.d/mcp.conf << EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+    location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
+    location ~ ^/mcp/[^/]+/(sse|messages) {
+        access_log /var/log/nginx/mcp_access.log mcp_masked;
+        proxy_pass http://127.0.0.1:${MCP_PORT};
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_set_header Connection '';
+        proxy_read_timeout 3600s;
+    }
+    location /health { proxy_pass http://127.0.0.1:${MCP_PORT}/health; }
+    location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
+}
+EOF
+systemctl enable nginx && systemctl start nginx
+nginx -t && systemctl reload nginx
+
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
+#!/bin/bash
+systemctl reload nginx
+HOOKEOF
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+
+VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
+echo "DNS解決待機中（最大30分・1分間隔）..."
+DOMAIN_IP=""
+for i in $(seq 1 30); do
+    DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
+    if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
+        echo "DNS解決確認（${i}回目）: ${DOMAIN_IP}"
+        break
+    fi
+    echo "${i}回目: 未解決（VPS:${VPS_IP} / DNS:${DOMAIN_IP}）"
+    sleep 60
+done
+
+if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
+    certbot --nginx --non-interactive --agree-tos \
+        --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" \
+        && echo "SSL取得完了" \
+        || echo "SSL取得失敗"
+else
+    echo "DNS未解決のためSSLスキップ（30分タイムアウト）"
+fi
+
+systemctl enable firewalld && systemctl start firewalld
+for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
+for X in 53/udp 53/tcp 3000/tcp; do firewall-cmd --permanent --add-port=$X; done
+firewall-cmd --reload
+
+VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
+echo "===== 完了: $(date) ====="
+echo "IP: ${VPS_IP} / DOMAIN: ${DOMAIN}"
+echo "claude.ai設定: URL=https://${DOMAIN}/mcp/<MCP_API_KEY>/sse"
+tail -50 /var/log/mcp-startup.log \
+    | grep -v 'MCP_API_KEY\|claude.ai設定' \
+    | mail -s "VPS startup: ${DOMAIN}" "$LETSENCRYPT_EMAIL"
