@@ -49,7 +49,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { exec } from "child_process";
-import { readFile, writeFile } from "fs/promises";
 
 const API_KEY = process.env.MCP_API_KEY;
 const PORT = parseInt(process.env.MCP_PORT || "3000");
@@ -109,33 +108,6 @@ function createMcpServer() {
       }
       setTimeout(() => run("nginx -s reload"), 2000);
       return { content: [{ type: "text", text: "nginx設定テストOK、2秒後reload。SSEセッションが切断されるので再接続してください。" }] };
-    }
-  );
-
-  server.tool(
-    "read_file",
-    "VPS上のファイルを読み込む",
-    { path: z.string() },
-    async ({ path }) => {
-      try {
-        return { content: [{ type: "text", text: await readFile(path, "utf8") }] };
-      } catch (e) {
-        return { content: [{ type: "text", text: "エラー: " + e.message }], isError: true };
-      }
-    }
-  );
-
-  server.tool(
-    "write_file",
-    "VPS上のファイルに内容を書き込む（上書き）",
-    { path: z.string(), content: z.string() },
-    async ({ path, content }) => {
-      try {
-        await writeFile(path, content, "utf8");
-        return { content: [{ type: "text", text: "書き込み完了: " + path }] };
-      } catch (e) {
-        return { content: [{ type: "text", text: "エラー: " + e.message }], isError: true };
-      }
     }
   );
 
@@ -286,12 +258,8 @@ else
 fi
 
 systemctl enable firewalld && systemctl start firewalld
-firewall-cmd --permanent --add-service=ssh
-firewall-cmd --permanent --add-service=http
-firewall-cmd --permanent --add-service=https
-firewall-cmd --permanent --add-port=53/udp
-firewall-cmd --permanent --add-port=53/tcp
-firewall-cmd --permanent --add-port=3000/tcp
+for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
+for X in 53/udp 53/tcp 3000/tcp; do firewall-cmd --permanent --add-port=$X; done
 firewall-cmd --reload
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
