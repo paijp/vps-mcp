@@ -4,16 +4,17 @@
 #
 # 概要:
 #   1. swapfile 1GB
-#   2. パッケージ（nginx/bind/certbot/postfix）
+#   2. パッケージ（nginx/bind/certbot/postfix/dnf-automatic）
 #   3. Node.js 20
 #   4. MCPサーバー (exec_command/nginx_reload)
 #   5. BIND プライマリDNS（allow-recursionでオープンリゾルバ防止）
 #   6. npm install
-#   7. systemdサービス
-#   8. Nginx（log_formatはhttpブロックに追加）
+#   7. systemdサービス（EnvironmentFileでAPIkeyを隔離）
+#   8. Nginx（MCPpathはaccess_log off）
 #   9. SSL: DNS解決を最大30分待機しcertbot実行
 #  10. firewalld
-#  11. スタートアップログをメール送信
+#  11. 週次reboot（日曜3時・Persistent=false）
+#  12. スタートアップログをメール送信
 set -euo pipefail
 
 DOMAIN=@@@DOMAIN@@@
@@ -37,9 +38,12 @@ dnf update -y
 dnf config-manager --enable crb
 dnf install -y curl nginx epel-release bind-utils bind
 dnf install -y certbot python3-certbot-nginx
-dnf install -y postfix s-nail
+dnf install -y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'  # IPv6なしVPSでの起動エラー対策
 systemctl enable postfix && systemctl start postfix
+sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.conf
+sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
+systemctl enable --now dnf-automatic-install.timer  # セキュリティアップデート自動化
 
 # 3. Node.js 20
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
@@ -189,12 +193,10 @@ NAMEDEOF
 grep -q 'named.conf.local' /etc/named.conf \
   || echo 'include "/etc/named/named.conf.local";' >> /etc/named.conf
 
-# listen-on: 外部からのDNS問い合わせを受け付ける
 sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf
 grep -q 'listen-on port 53' /etc/named.conf \
   || sed -i '/^options/a\\tlisten-on port 53 { any; };' /etc/named.conf
 
-# allow-query: 権威サーバとして全インターネットからの問い合わせを許可
 sed -i 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' /etc/named.conf
 grep -q 'allow-query' /etc/named.conf \
   || sed -i '/^options/a\\tallow-query { any; };' /etc/named.conf
@@ -205,7 +207,6 @@ grep -q 'allow-recursion' /etc/named.conf \
 
 systemctl enable named && systemctl start named
 
-# notify送信（さくらセカンダリへゾーン転送を促す）
 sleep 10
 rndc querylog on
 rndc notify "${DOMAIN}" && echo "notify送信完了"
@@ -215,6 +216,7 @@ journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || true
 cd "$MCP_DIR" && npm install --production
 
 # 7. systemdサービス
+# EnvironmentFileを使いAPIkeyを隔離（systemctl catで表示されない）
 cat > /etc/systemd/system/mcp-server.service << EOF
 [Unit]
 Description=Claude.ai MCP Server
@@ -226,13 +228,19 @@ WorkingDirectory=${MCP_DIR}
 ExecStart=/usr/bin/node ${MCP_DIR}/index.mjs
 Restart=always
 RestartSec=5
-Environment=MCP_API_KEY=${MCP_API_KEY}
-Environment=MCP_PORT=${MCP_PORT}
+EnvironmentFile=/etc/mcp-server/env
 StandardOutput=append:/var/log/mcp-server.log
 StandardError=append:/var/log/mcp-server.log
 [Install]
 WantedBy=multi-user.target
 EOF
+
+mkdir -p /etc/mcp-server
+cat > /etc/mcp-server/env << EOF
+MCP_API_KEY=${MCP_API_KEY}
+MCP_PORT=${MCP_PORT}
+EOF
+chmod 600 /etc/mcp-server/env  # rootのみ読み可能
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
 # 8. Nginx
@@ -245,7 +253,7 @@ server {
     server_name ${DOMAIN};
     location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
     location ~ ^/mcp/[^/]+/(sse|messages) {
-        access_log /var/log/nginx/mcp_access.log mcp_masked;  # APIkeyをログに残さない
+        access_log off;  # APIkeyがログに残らないようオフ
         proxy_pass http://127.0.0.1:${MCP_PORT};
         proxy_http_version 1.1;
         proxy_buffering off;
@@ -295,12 +303,30 @@ for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
 for X in 53/udp 53/tcp 3000/tcp; do firewall-cmd --permanent --add-port=$X; done
 firewall-cmd --reload
 
-# 11. スタートアップログをメール送信（certbot結果確認用）
+# 11. 週次reboot (日曜3時・Persistent=false: 起動時スキップされる)
+cat > /etc/systemd/system/weekly-reboot.timer << 'EOF'
+[Unit]
+Description=Weekly reboot
+[Timer]
+OnCalendar=Sun 03:00
+Persistent=false
+[Install]
+WantedBy=timers.target
+EOF
+cat > /etc/systemd/system/weekly-reboot.service << 'EOF'
+[Unit]
+Description=Weekly reboot
+[Service]
+Type=oneshot
+ExecStart=/sbin/reboot
+EOF
+systemctl enable --now weekly-reboot.timer
+
+# 12. スタートアップログをメール送信（certbot結果確認用）
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "取得失敗")
 echo "===== 完了: $(date) ====="
 echo "IP: ${VPS_IP} / DOMAIN: ${DOMAIN}"
 echo "claude.ai設定: URL=https://${DOMAIN}/mcp/<MCP_API_KEY>/sse"  # API keyはマスク
-# メール本文からはAPIkeyを含む行を除外
 tail -50 /var/log/mcp-startup.log \
     | grep -v 'MCP_API_KEY\|claude.ai設定' \
     | mail -s "VPS startup: ${DOMAIN}" "$LETSENCRYPT_EMAIL"
