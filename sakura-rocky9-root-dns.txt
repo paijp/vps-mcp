@@ -10,23 +10,30 @@ NS1_IP=@@@NS1_IP@@@
 exec > >(tee -a /var/log/mcp-startup.log) 2>&1
 echo "===== Setup Start: $(date) ====="
 
+# 1. swapfile
 fallocate -l 1G /swapfile
 chmod og-rwx /swapfile
 mkswap /swapfile
 swapon /swapfile
 echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 
+# 2. パッケージ
 dnf update -y
 dnf config-manager --enable crb
 dnf install -y curl nginx epel-release bind-utils bind
 dnf install -y certbot python3-certbot-nginx
-dnf install -y postfix s-nail
+dnf install -y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
 systemctl enable postfix && systemctl start postfix
+sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.conf
+sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
+systemctl enable --now dnf-automatic-install.timer
 
+# 3. Node.js 20
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
 dnf install -y nodejs
 
+# 4. MCPサーバー
 MCP_DIR="/opt/mcp-server"
 mkdir -p "$MCP_DIR"
 
@@ -139,6 +146,7 @@ app.post("/mcp/:key/messages", auth, async (req, res) => {
 app.listen(PORT, "127.0.0.1", () => console.log(`MCP listening on ${PORT}`));
 MCPEOF
 
+# 5. BIND
 SERIAL=$(date +%Y%m%d01)
 mkdir -p /etc/named
 
@@ -184,8 +192,10 @@ rndc querylog on
 rndc notify "${DOMAIN}" && echo "notify送信完了"
 journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || true
 
+# 6. npm
 cd "$MCP_DIR" && npm install --production
 
+# 7. systemd
 cat > /etc/systemd/system/mcp-server.service << EOF
 [Unit]
 Description=Claude.ai MCP Server
@@ -206,6 +216,7 @@ WantedBy=multi-user.target
 EOF
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
+# 8. Nginx
 sed -i '/http {/a\    log_format mcp_masked '\''$remote_addr - [$time_local] "$request_method $uri" $status'\''\;' /etc/nginx/nginx.conf
 
 cat > /etc/nginx/conf.d/mcp.conf << EOF
@@ -228,6 +239,7 @@ EOF
 systemctl enable nginx && systemctl start nginx
 nginx -t && systemctl reload nginx
 
+# 9. SSL
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
 cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
 #!/bin/bash
@@ -257,6 +269,7 @@ else
     echo "DNS未解決のためSSLスキップ（30分タイムアウト）"
 fi
 
+# 10. firewalld
 systemctl enable firewalld && systemctl start firewalld
 for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
 for X in 53/udp 53/tcp 3000/tcp; do firewall-cmd --permanent --add-port=$X; done
