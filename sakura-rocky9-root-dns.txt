@@ -64,12 +64,9 @@ app.use(express.json());
 
 function getToken() { try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return null; } }
 
-let failCount = 0;
 app.post("/token", (req, res) => {
-  if (failCount > 5) return res.status(429).json({ error: "Too many attempts" });
   let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { secret = null; }
-  if (getToken() || req.body.client_secret !== secret) { failCount++; return res.status(403).json({ error: "Forbidden" }); }
-  failCount = 0;
+  if (getToken() || req.body.client_secret !== secret) return res.status(403).json({ error: "Forbidden" });
   const token = crypto.randomUUID();
   writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
   res.json({ access_token: token, token_type: "Bearer" });
