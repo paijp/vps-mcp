@@ -136,7 +136,7 @@ function createMcpServer() {
   // ツール1: 任意コマンド実行
   server.tool(
     "exec_command",
-    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。",
+    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、その場合notifyは10分程度かかる場合がある。",
     { command: z.string() },
     async ({ command }) => {
       try {
@@ -286,7 +286,7 @@ server {
     server_name ${DOMAIN};
     location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
     location ~ ^/mcp/(sse|messages) {
-        access_log off;  # APIkeyをログに残さないようオフ
+        access_log off;  # APIkeyがログに残らないようオフ
         proxy_pass http://127.0.0.1:${MCP_PORT};
         proxy_http_version 1.1;
         proxy_buffering off;
@@ -310,15 +310,12 @@ HOOKEOF
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
-echo "DNS解決待機中..."
 DOMAIN_IP=""
 for i in $(seq 1 30); do
     DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
     if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
-        echo "DNS解決（${i}回目）"
         break
     fi
-    echo "${i}: VPS=${VPS_IP} DNS=${DOMAIN_IP}"
     sleep 60
 done
 
@@ -327,8 +324,6 @@ if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
         --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" \
         && echo "SSL完了" \
         || echo "SSL失敗"
-else
-    echo "DNS未解決のためSSLスキップ"
 fi
 
 # 10. firewalld
