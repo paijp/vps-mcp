@@ -99,7 +99,7 @@ function createMcpServer() {
 
   server.tool(
     "exec_command",
-    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSのため、notifyは10分程度かかる場合がある。",
+    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、その場合notifyは10分程度かかる場合がある。",
     { command: z.string() },
     async ({ command }) => {
       try {
