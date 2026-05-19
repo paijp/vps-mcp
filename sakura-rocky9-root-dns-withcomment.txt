@@ -8,9 +8,12 @@
 #   2. パッケージ（nginx/bind/certbot/postfix/dnf-automatic）
 #   3. Node.js 20
 #   4. MCPサーバー (exec_command/nginx_reload)
-#      OAuth2簡易認証: /tokenエンドポイントで初回のみtoken発行
-#      tokenは/etc/mcp-server/tokenに保存・アクセスのたびに読み込み
-#      rm /etc/mcp-server/token で即座に再認証が可能
+#      OAuth2簡易認証:
+#        /token: secretファイルと一致したらtokenを返しsecretファイルを削除
+#                tokenファイルがなければ自動生成、あれば既存tokenを返す
+#        auth:   tokenファイルと一致する場合のみ通過
+#        再接続: secretファイルを再作成すると同じtokenが返される
+#        リセット: rm /etc/mcp-server/token で即座にアクセス不可
 #   5. BIND プライマリDNS（allow-recursionでオープンリゾルバ防止）
 #   6. npm install
 #   7. systemdサービス（EnvironmentFileでシークレットを隔離）
@@ -76,11 +79,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { exec } from "child_process";  // 非同期: イベントループをブロックしない
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
-const SECRET_FILE = "/etc/mcp-server/secret";
-const TOKEN_FILE  = "/etc/mcp-server/token";
+const BASE        = "/etc/mcp-server";
+const SECRET_FILE = `${BASE}/secret`;
+const TOKEN_FILE  = `${BASE}/token`;
+// tokenはUUID形式だが、サニタイズは文字種制限でパストラバーサル等を防ぐ
+const SAFE_TOK    = /^[-0-9A-Fa-f]{20,40}$/;
 const PORT = parseInt(process.env.MCP_PORT || "3000");
 
 const app = express();
@@ -89,18 +95,24 @@ app.use(express.json());
 // tokenファイルを都度読み込む（rm tokenで即座に再認証が可能）
 function getToken() { try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return null; } }
 
-// /token: 初回のみtoken発行・以降はgetToken()がtruthyで即座に403
+// /token:
+//   secretファイルがなければ403
+//   client_secretが不一致でも403
+//   一致したらsecretファイルを削除（以降は403になる）
+//   tokenファイルがなければ新規生成、あれば既存値を返す
 app.post("/token", (req, res) => {
-  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { secret = null; }
-  if (getToken() || req.body.client_secret !== secret) return res.status(403).json({ error: "Forbidden" });
-  const token = crypto.randomUUID();
-  writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
+  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { return res.status(403).json({ error: "Forbidden" }); }
+  if (req.body.client_secret !== secret) return res.status(403).json({ error: "Forbidden" });
+  unlinkSync(SECRET_FILE);  // 認証成功したら即座に削除（以降の/tokenは403）
+  let token = getToken();
+  if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
   res.json({ access_token: token, token_type: "Bearer" });
 });
 
-// Bearer token認証
+// Bearer token認証。SAFE_TOKでサニタイズ後、tokenファイルと比較
 function auth(req, res, next) {
   const t = (req.headers.authorization || "").replace("Bearer ", "");
+  if (!SAFE_TOK.test(t)) return res.status(401).json({ error: "Unauthorized" });
   const s = getToken();
   if (!s || t !== s) return res.status(401).json({ error: "Unauthorized" });
   next();
@@ -154,7 +166,7 @@ function createMcpServer() {
         return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
       }
       setTimeout(() => run("nginx -s reload"), 2000);  // 2秒後に実行
-      return { content: [{ type: "text", text: "nginx設定テストOK、2秒後reload。SSEセッションが切断されるので再接続してください。" }] };
+      return { content: [{ type: "text", text: "nginx設定テストOK、2秒後にreload。SSEセッションが切断されるので再接続してください。" }] };
     }
   );
 
@@ -214,10 +226,12 @@ NAMEDEOF
 grep -q 'named.conf.local' /etc/named.conf \
   || echo 'include "/etc/named/named.conf.local";' >> /etc/named.conf
 
+# listen-on: 外部からのDNS問い合わせを受け付ける
 sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf
 grep -q 'listen-on port 53' /etc/named.conf \
   || sed -i '/^options/a\\tlisten-on port 53 { any; };' /etc/named.conf
 
+# allow-query: 権威サーバとして全インターネットからの問い合わせを許可
 sed -i 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' /etc/named.conf
 grep -q 'allow-query' /etc/named.conf \
   || sed -i '/^options/a\\tallow-query { any; };' /etc/named.conf
@@ -257,7 +271,7 @@ WantedBy=multi-user.target
 EOF
 
 mkdir -p /etc/mcp-server
-echo "$CLIENT_SECRET" > /etc/mcp-server/secret
+echo "$CLIENT_SECRET" > /etc/mcp-server/secret  # 認証後に自動削除される
 chmod 600 /etc/mcp-server/secret
 cat > /etc/mcp-server/env << EOF
 MCP_PORT=${MCP_PORT}
@@ -266,14 +280,13 @@ chmod 600 /etc/mcp-server/env
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
 # 8. Nginx
-# log_formatはhttpブロックに書く必要がある（server blockに書くと他のconf.dから参照不可）
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
     server_name ${DOMAIN};
     location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
     location ~ ^/mcp/(sse|messages) {
-        access_log off;  # APIkeyがログに残らないようオフ
+        access_log off;  # APIkeyをログに残さないようオフ
         proxy_pass http://127.0.0.1:${MCP_PORT};
         proxy_http_version 1.1;
         proxy_buffering off;
