@@ -263,15 +263,12 @@ HOOKEOF
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
-echo "DNS解決待機中..."
 DOMAIN_IP=""
 for i in $(seq 1 30); do
     DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
     if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
-        echo "DNS解決（${i}回目）"
         break
     fi
-    echo "${i}: VPS=${VPS_IP} DNS=${DOMAIN_IP}"
     sleep 60
 done
 
@@ -280,8 +277,6 @@ if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
         --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" \
         && echo "SSL完了" \
         || echo "SSL失敗"
-else
-    echo "DNS未解決のためSSLスキップ"
 fi
 
 systemctl enable firewalld && systemctl start firewalld
