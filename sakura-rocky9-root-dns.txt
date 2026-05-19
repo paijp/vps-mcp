@@ -52,11 +52,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { exec } from "child_process";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
-const SECRET_FILE = "/etc/mcp-server/secret";
-const TOKEN_FILE  = "/etc/mcp-server/token";
+const BASE        = "/etc/mcp-server";
+const SECRET_FILE = `${BASE}/secret`;
+const TOKEN_FILE  = `${BASE}/token`;
+const SAFE_TOK    = /^[-0-9A-Fa-f]{20,40}$/;
 const PORT = parseInt(process.env.MCP_PORT || "3000");
 
 const app = express();
@@ -65,15 +67,17 @@ app.use(express.json());
 function getToken() { try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return null; } }
 
 app.post("/token", (req, res) => {
-  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { secret = null; }
-  if (getToken() || req.body.client_secret !== secret) return res.status(403).json({ error: "Forbidden" });
-  const token = crypto.randomUUID();
-  writeFileSync(TOKEN_FILE, token, { mode: 0o600 });
+  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { return res.status(403).json({ error: "Forbidden" }); }
+  if (req.body.client_secret !== secret) return res.status(403).json({ error: "Forbidden" });
+  unlinkSync(SECRET_FILE);
+  let token = getToken();
+  if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
   res.json({ access_token: token, token_type: "Bearer" });
 });
 
 function auth(req, res, next) {
   const t = (req.headers.authorization || "").replace("Bearer ", "");
+  if (!SAFE_TOK.test(t)) return res.status(401).json({ error: "Unauthorized" });
   const s = getToken();
   if (!s || t !== s) return res.status(401).json({ error: "Unauthorized" });
   next();
@@ -124,7 +128,7 @@ function createMcpServer() {
         return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
       }
       setTimeout(() => run("nginx -s reload"), 2000);
-      return { content: [{ type: "text", text: "nginx設定テストOK、2秒後reload。SSEセッションが切断されるので再接続してください。" }] };
+      return { content: [{ type: "text", text: "nginx設定テストOK、2秒後にreload。SSEセッションが切断されるので再接続してください。" }] };
     }
   );
 
