@@ -2,8 +2,6 @@
 set -euo pipefail
 
 DOMAIN=@@@DOMAIN@@@
-LETSENCRYPT_EMAIL=@@@LETSENCRYPT_EMAIL@@@
-CLIENT_SECRET=@@@CLIENT_SECRET@@@
 NS1_IP=@@@NS1_IP@@@
 
 exec > >(tee -a /var/log/mcp-startup.log) 2>&1
@@ -237,7 +235,7 @@ WantedBy=multi-user.target
 EOF
 
 mkdir -p /etc/mcp-server
-echo "$CLIENT_SECRET" > /etc/mcp-server/secret
+echo "@@@CLIENT_SECRET@@@" > /etc/mcp-server/secret
 chmod 600 /etc/mcp-server/secret
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
@@ -285,7 +283,7 @@ for i in $(seq 1 30); do
     DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
     if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
         certbot --nginx --non-interactive --agree-tos \
-            --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" || true
+            --email "@@@EMAIL@@@" -d "$DOMAIN" || true
         break
     fi
     sleep 60
@@ -314,4 +312,4 @@ ExecStart=/sbin/reboot
 EOF
 systemctl enable --now weekly-reboot.timer
 
-mail -s "VPS startup: ${DOMAIN}" "$LETSENCRYPT_EMAIL" <<< "done"
+mail -s "VPS startup: ${DOMAIN}" "@@@EMAIL@@@" <<< "done"
