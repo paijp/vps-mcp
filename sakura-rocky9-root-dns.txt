@@ -199,9 +199,6 @@ zone "${DOMAIN}" {
 };
 NAMEDEOF
 
-grep -q 'named.conf.local' /etc/named.conf \
-  || echo 'include "/etc/named/named.conf.local";' >> /etc/named.conf
-
 F=/etc/named.conf
 grep -q 'named.conf.local' $F \
   || echo 'include "/etc/named/named.conf.local";' >> $F
@@ -220,7 +217,6 @@ systemctl enable named && systemctl start named
 sleep 10
 rndc querylog on
 rndc notify "${DOMAIN}"
-journalctl -u named -n 20 | grep -i "xfer\|transfer\|axfr\|notify" || true
 
 cd "$MCP_DIR" && npm install --production
 
