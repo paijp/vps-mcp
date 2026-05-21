@@ -6,6 +6,8 @@ NS1_IP=@@@NS1_IP@@@
 
 exec > >(tee -a /var/log/mcp-startup.log) 2>&1
 
+hostnamectl set-hostname ${DOMAIN}
+
 fallocate -l 1G /swapfile
 chmod og-rwx /swapfile
 mkswap /swapfile
@@ -86,6 +88,7 @@ app.post("/token", (req, res) => {
   let token = getToken();
   if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
   res.json({ access_token: token, token_type: "Bearer" });
+  exec("echo done | mail -s 'MCP token issued' @@@EMAIL@@@");
 });
 
 function auth(req, res, next) {
@@ -278,10 +281,10 @@ HOOKEOF
 chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
-DOMAIN_IP=""
+IP=""
 for i in $(seq 1 30); do
-    DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
-    if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
+    IP=$(dig +short "$DOMAIN" | tail -1)
+    if [ -n "$IP" ] && [ "$VPS_IP" = "$IP" ]; then
         certbot --nginx --non-interactive --agree-tos \
             --email "@@@EMAIL@@@" -d "$DOMAIN" || true
         break
