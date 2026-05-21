@@ -57,8 +57,6 @@ import crypto from "crypto";
 const BASE        = "/etc/mcp-server";
 const SECRET_FILE = `${BASE}/secret`;
 const TOKEN_FILE  = `${BASE}/token`;
-const SAFE_TOK    = /^[-0-9A-Fa-f]{20,40}$/;
-const PORT = 3000;
 
 const app = express();
 app.use(express.json());
@@ -95,7 +93,6 @@ app.post("/token", (req, res) => {
 
 function auth(req, res, next) {
   const t = (req.headers.authorization || "").replace("Bearer ", "");
-  if (!SAFE_TOK.test(t)) return res.status(401).json({ error: "Unauthorized" });
   const s = getToken();
   if (!s || t !== s) return res.status(401).json({ error: "Unauthorized" });
   next();
@@ -175,7 +172,7 @@ app.post("/mcp/messages", auth, async (req, res) => {
   await transport.handlePostMessage(req, res, req.body);
 });
 
-app.listen(PORT, "127.0.0.1", () => console.log(`MCP listening on ${PORT}`));
+app.listen(3000, "127.0.0.1", () => console.log("MCP listening"));
 MCPEOF
 
 SERIAL=$(date +%Y%m%d01)
@@ -247,6 +244,7 @@ echo "$CLIENT_SECRET" > /etc/mcp-server/secret
 chmod 600 /etc/mcp-server/secret
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
+S="proxy_pass http://127.0.0.1:3000"
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
@@ -254,7 +252,7 @@ server {
     location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
     location ~ ^/mcp/(sse|messages) {
         access_log off;
-        proxy_pass http://127.0.0.1:3000;
+        ${S};
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_set_header Connection '';
@@ -263,13 +261,13 @@ server {
         proxy_read_timeout 3600s;
     }
     location /.well-known/oauth-authorization-server {
-        proxy_pass http://127.0.0.1:3000/.well-known/oauth-authorization-server;
+        ${S}/.well-known/oauth-authorization-server;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Host \$host;
     }
-    location /authorize { proxy_pass http://127.0.0.1:3000/authorize; }
-    location /token  { proxy_pass http://127.0.0.1:3000/token; }
-    location /health { proxy_pass http://127.0.0.1:3000/health; }
+    location /authorize { ${S}/authorize; }
+    location /token  { ${S}/token; }
+    location /health { ${S}/health; }
     location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
@@ -288,16 +286,12 @@ DOMAIN_IP=""
 for i in $(seq 1 30); do
     DOMAIN_IP=$(dig +short "$DOMAIN" | tail -1)
     if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
+        certbot --nginx --non-interactive --agree-tos \
+            --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" || true
         break
     fi
     sleep 60
 done
-
-if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
-    certbot --nginx --non-interactive --agree-tos \
-        --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" \
-        && echo "SSL完了" || true
-fi
 
 systemctl enable firewalld && systemctl start firewalld
 for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
