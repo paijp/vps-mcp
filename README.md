@@ -4,13 +4,6 @@
 
 > このコードは Claude Sonnet 4.6 が書きました。
 
-## ブランチ
-
-| ブランチ | 内容 |
-|---|---|
-| `main` | 安定版 |
-| `dev` | OAuth2完全対応版（開発中） |
-
 ## ファイル一覧
 
 | ファイル | 説明 |
@@ -40,7 +33,7 @@
 | `DOMAIN` | ドメイン名 | `example.com` |
 | `NS1_IP` | このVPSのグローバルIPアドレス | `153.126.xxx.xxx` |
 | `CLIENT_SECRET` | OAuth2認証用クライアントシークレット（6文字以上推奨） | `abc123` |
-| `EMAIL` | Let's Encrypt 通知メール・スタートアップログ送信先 | `you@example.com` |
+| `EMAIL` | Let's Encrypt 通知メール・スタートアップログ送信先・token発行時通知先 | `you@example.com` |
 
 ### NS1_IP について
 
@@ -59,8 +52,8 @@ OAuth2 authorization_code + PKCEフローを使用しています。
    → redirect_uriにcode=xでリダイレクト（素通り）
 
 3. POST /token { client_secret: "...", code: "x", ... }
-   → secretファイルと照合→ token返却・secretファイル削除
-   → tokenは最初の1回のみ発行される（secretファイルが削除されるため）
+   → secretファイルと照合 → token返却・secretファイル削除
+   → tokenは最初の1回のみ発行（secretファイルが削除されるため）
    → token発行時にメール通知
 
 4. GET /mcp/sse { Authorization: Bearer <token> }
@@ -71,8 +64,8 @@ OAuth2 authorization_code + PKCEフローを使用しています。
 
 ```
 Settings → Integrations → Add custom integration
-URL:          https://<DOMAIN>/mcp/sse
-client_id:    mcp（任意）
+URL:           https://<DOMAIN>/mcp/sse
+client_id:     mcp（任意）
 client_secret: <CLIENT_SECRET に設定した値>
 ```
 
@@ -91,7 +84,7 @@ chmod 600 /etc/mcp-server/secret
 
 ```bash
 rm /etc/mcp-server/token
-# 次のリクエストから即座に401を返す
+# 次のリクエストから401を返す
 # secretファイルを再作成すると再認証可能
 ```
 
@@ -127,7 +120,7 @@ rm /etc/mcp-server/token
 | 認証方式 | OAuth2（authorization_code + PKCE）、client_secretで検証 |
 | token発行 | 初回のみ（secretファイル削除後は403） |
 | token発行通知 | メール送信（不審な接続を即座に検知可能） |
-| APIキーのログ漏洩 | Nginx access_log off（MCPパス） |
+| MCPログの標準出力 | Nginx access_log off（MCPパス） |
 | オープンリゾルバ | allow-recursion { 127.0.0.1; } |
 | セキュリティ自動更新 | dnf-automatic（security only） |
 | カーネル更新 | 週次reboot（日曜3時） |
