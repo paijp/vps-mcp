@@ -4,6 +4,13 @@
 
 > このコードは Claude Sonnet 4.6 が書きました。
 
+## ブランチ
+
+| ブランチ | 内容 |
+|---|---|
+| `main` | 安定版 |
+| `dev` | OAuth2完全対応版（開発中） |
+
 ## ファイル一覧
 
 | ファイル | 説明 |
@@ -31,32 +38,61 @@
 | パラメータ名 | 説明 | 例 |
 |---|---|---|
 | `DOMAIN` | ドメイン名 | `example.com` |
-| `LETSENCRYPT_EMAIL` | Let's Encrypt 通知メール・スタートアップログ送信先 | `you@example.com` |
-| `CLIENT_SECRET` | OAuth2認証用クライアントシークレット（6文字以上推奨） | `abc123` |
 | `NS1_IP` | このVPSのグローバルIPアドレス | `153.126.xxx.xxx` |
+| `CLIENT_SECRET` | OAuth2認証用クライアントシークレット（6文字以上推奨） | `abc123` |
+| `EMAIL` | Let's Encrypt 通知メール・スタートアップログ送信先 | `you@example.com` |
 
 ### NS1_IP について
 
 VPSのグローバルIPアドレスをゾーンファイルの `@ IN A` および `ns1 IN A`（グルーレコード）に使用します。
-`curl ifconfig.me` で自動取得することも可能ですが、複数NICがある場合にプライベートIPが取得されることがあるため、さくらのコントロールパネルで確認したグローバルIPを明示的に指定しています。
+複数NICがある場合にプライベートIPが取得されることがあるため、さくらのコントロールパネルで確認したグローバルIPを明示的に指定しています。
+
+## OAuth2認証フロー
+
+OAuth2 authorization_code + PKCEフローを使用しています。
+
+```
+1. GET /.well-known/oauth-authorization-server
+   → claude.aiがエンドポイントを自動検出
+
+2. GET /authorize
+   → redirect_uriにcode=xでリダイレクト（素通り）
+
+3. POST /token { client_secret: "...", code: "x", ... }
+   → secretファイルと照合→ token返却・secretファイル削除
+   → tokenは最初の1回のみ発行される（secretファイルが削除されるため）
+   → token発行時にメール通知
+
+4. GET /mcp/sse { Authorization: Bearer <token> }
+   → SSE接続成功
+```
 
 ## claude.ai への登録
 
 ```
 Settings → Integrations → Add custom integration
-URL:            https://<DOMAIN>/mcp/sse
-token_endpoint: https://<DOMAIN>/token
-client_id:      mcp
-client_secret:  <CLIENT_SECRET に設定した値>
+URL:          https://<DOMAIN>/mcp/sse
+client_id:    mcp（任意）
+client_secret: <CLIENT_SECRET に設定した値>
 ```
 
 初回接続時に自動でtokenが発行されます。以降は同じtokenで接続が維持されます。
+
+### 2台目のアカウントから接続する場合
+
+secretファイルを再作成すると同じtokenが返されます。
+
+```bash
+echo "<CLIENT_SECRETの値>" > /etc/mcp-server/secret
+chmod 600 /etc/mcp-server/secret
+```
 
 ### tokenのリセット
 
 ```bash
 rm /etc/mcp-server/token
-# systemctl restart は不要・次のリクエストから即座に再認証
+# 次のリクエストから即座に401を返す
+# secretファイルを再作成すると再認証可能
 ```
 
 ## MCPツール
@@ -88,9 +124,10 @@ rm /etc/mcp-server/token
 
 | 項目 | 対応内容 |
 |---|---|
-| 認証方式 | OAuth2簡易実装（Bearer token・初回のみ発行・URLパスにキーなし） |
+| 認証方式 | OAuth2（authorization_code + PKCE）、client_secretで検証 |
+| token発行 | 初回のみ（secretファイル削除後は403） |
+| token発行通知 | メール送信（不審な接続を即座に検知可能） |
 | APIキーのログ漏洩 | Nginx access_log off（MCPパス） |
-| APIキーのsystemd漏洩 | EnvironmentFileで隔離（systemctl catに表示されない） |
 | オープンリゾルバ | allow-recursion { 127.0.0.1; } |
 | セキュリティ自動更新 | dnf-automatic（security only） |
 | カーネル更新 | 週次reboot（日曜3時） |
