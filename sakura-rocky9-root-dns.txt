@@ -7,7 +7,6 @@ CLIENT_SECRET=@@@CLIENT_SECRET@@@
 NS1_IP=@@@NS1_IP@@@
 
 exec > >(tee -a /var/log/mcp-startup.log) 2>&1
-echo "===== $(date) ====="
 
 fallocate -l 1G /swapfile
 chmod og-rwx /swapfile
@@ -77,14 +76,14 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
 
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query;
-  if (!redirect_uri) return res.status(400).json({ error: "Bad Request" });
+  if (!redirect_uri) return res.status(400).send();
   res.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
 });
 
 app.post("/token", (req, res) => {
   const { client_secret } = req.body;
-  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { return res.status(403).json({ error: "Forbidden" }); }
-  if (client_secret !== secret) return res.status(403).json({ error: "Forbidden" });
+  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { return res.status(403).send(); }
+  if (client_secret !== secret) return res.status(403).send();
   try { unlinkSync(SECRET_FILE); } catch {}
   let token = getToken();
   if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
@@ -94,7 +93,7 @@ app.post("/token", (req, res) => {
 function auth(req, res, next) {
   const t = (req.headers.authorization || "").replace("Bearer ", "");
   const s = getToken();
-  if (!s || t !== s) return res.status(401).json({ error: "Unauthorized" });
+  if (!s || t !== s) return res.status(401).send();
   next();
 }
 
@@ -243,6 +242,7 @@ chmod 600 /etc/mcp-server/secret
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
 S="proxy_pass http://127.0.0.1:3000"
+P="proxy_set_header X-Forwarded-"
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
@@ -254,14 +254,14 @@ server {
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_set_header Connection '';
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
+        ${P}Proto \$scheme;
+        ${P}Host \$host;
         proxy_read_timeout 3600s;
     }
     location /.well-known/oauth-authorization-server {
         ${S}/.well-known/oauth-authorization-server;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Host \$host;
+        ${P}Proto \$scheme;
+        ${P}Host \$host;
     }
     location /authorize { ${S}/authorize; }
     location /token  { ${S}/token; }
@@ -314,8 +314,4 @@ ExecStart=/sbin/reboot
 EOF
 systemctl enable --now weekly-reboot.timer
 
-VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "失敗")
-echo "===== $(date) ===== ${VPS_IP} ${DOMAIN}"
-echo "SSE:https://${DOMAIN}/mcp/sse TOKEN:https://${DOMAIN}/token"
-tail -50 /var/log/mcp-startup.log \
-    | mail -s "VPS startup: ${DOMAIN}" "$LETSENCRYPT_EMAIL"
+mail -s "VPS startup: ${DOMAIN}" "$LETSENCRYPT_EMAIL" <<< "done"
