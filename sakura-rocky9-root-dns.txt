@@ -4,7 +4,6 @@ set -euo pipefail
 DOMAIN=@@@DOMAIN@@@
 LETSENCRYPT_EMAIL=@@@LETSENCRYPT_EMAIL@@@
 CLIENT_SECRET=@@@CLIENT_SECRET@@@
-MCP_PORT=3000
 NS1_IP=@@@NS1_IP@@@
 
 exec > >(tee -a /var/log/mcp-startup.log) 2>&1
@@ -59,17 +58,36 @@ const BASE        = "/etc/mcp-server";
 const SECRET_FILE = `${BASE}/secret`;
 const TOKEN_FILE  = `${BASE}/token`;
 const SAFE_TOK    = /^[-0-9A-Fa-f]{20,40}$/;
-const PORT = parseInt(process.env.MCP_PORT || "3000");
+const PORT = 3000;
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 function getToken() { try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return null; } }
 
+app.get("/.well-known/oauth-authorization-server", (req, res) => {
+  const host = req.headers["x-forwarded-host"] || req.headers.host || req.hostname;
+  const proto = req.headers["x-forwarded-proto"] || req.protocol;
+  const base = `${proto}://${host}`;
+  res.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
+    token_endpoint: `${base}/token`,
+    token_endpoint_auth_methods_supported: ["client_secret_post"],
+    response_types_supported: ["code"],
+    code_challenge_methods_supported: ["S256"] });
+});
+
+app.get("/authorize", (req, res) => {
+  const { redirect_uri, state } = req.query;
+  if (!redirect_uri) return res.status(400).json({ error: "Bad Request" });
+  res.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
+});
+
 app.post("/token", (req, res) => {
+  const { client_secret } = req.body;
   let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { return res.status(403).json({ error: "Forbidden" }); }
-  if (req.body.client_secret !== secret) return res.status(403).json({ error: "Forbidden" });
-  unlinkSync(SECRET_FILE);
+  if (client_secret !== secret) return res.status(403).json({ error: "Forbidden" });
+  try { unlinkSync(SECRET_FILE); } catch {}
   let token = getToken();
   if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
   res.json({ access_token: token, token_type: "Bearer" });
@@ -218,7 +236,6 @@ WorkingDirectory=${MCP_DIR}
 ExecStart=/usr/bin/node ${MCP_DIR}/index.mjs
 Restart=always
 RestartSec=5
-EnvironmentFile=/etc/mcp-server/env
 StandardOutput=append:/var/log/mcp-server.log
 StandardError=append:/var/log/mcp-server.log
 [Install]
@@ -228,10 +245,6 @@ EOF
 mkdir -p /etc/mcp-server
 echo "$CLIENT_SECRET" > /etc/mcp-server/secret
 chmod 600 /etc/mcp-server/secret
-cat > /etc/mcp-server/env << EOF
-MCP_PORT=${MCP_PORT}
-EOF
-chmod 600 /etc/mcp-server/env
 systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
 
 cat > /etc/nginx/conf.d/mcp.conf << EOF
@@ -241,14 +254,22 @@ server {
     location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
     location ~ ^/mcp/(sse|messages) {
         access_log off;
-        proxy_pass http://127.0.0.1:${MCP_PORT};
+        proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_set_header Connection '';
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
         proxy_read_timeout 3600s;
     }
-    location /token  { proxy_pass http://127.0.0.1:${MCP_PORT}/token; }
-    location /health { proxy_pass http://127.0.0.1:${MCP_PORT}/health; }
+    location /.well-known/oauth-authorization-server {
+        proxy_pass http://127.0.0.1:3000/.well-known/oauth-authorization-server;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+    location /authorize { proxy_pass http://127.0.0.1:3000/authorize; }
+    location /token  { proxy_pass http://127.0.0.1:3000/token; }
+    location /health { proxy_pass http://127.0.0.1:3000/health; }
     location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
@@ -275,8 +296,7 @@ done
 if [ -n "$DOMAIN_IP" ] && [ "$VPS_IP" = "$DOMAIN_IP" ]; then
     certbot --nginx --non-interactive --agree-tos \
         --email "$LETSENCRYPT_EMAIL" -d "$DOMAIN" \
-        && echo "SSL完了" \
-        || echo "SSL失敗"
+        && echo "SSL完了" || true
 fi
 
 systemctl enable firewalld && systemctl start firewalld
@@ -303,8 +323,7 @@ EOF
 systemctl enable --now weekly-reboot.timer
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "失敗")
-echo "===== $(date) ====="
-echo "${VPS_IP} ${DOMAIN}"
+echo "===== $(date) ===== ${VPS_IP} ${DOMAIN}"
 echo "SSE:https://${DOMAIN}/mcp/sse TOKEN:https://${DOMAIN}/token"
 tail -50 /var/log/mcp-startup.log \
     | mail -s "VPS startup: ${DOMAIN}" "$LETSENCRYPT_EMAIL"
