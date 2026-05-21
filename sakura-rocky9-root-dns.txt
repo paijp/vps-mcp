@@ -150,26 +150,26 @@ function createMcpServer() {
   return server;
 }
 
-const transports = new Map();
+const ta = new Map();
 
 app.get("/mcp/sse", auth, async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   const server = createMcpServer();
-  const transport = new SSEServerTransport("/mcp/messages", res);
-  transports.set(transport.sessionId, transport);
-  await server.connect(transport);
+  const t = new SSEServerTransport("/mcp/messages", res);
+  ta.set(t.sessionId, t);
+  await server.connect(t);
   req.on("close", () => {
-    transports.delete(transport.sessionId);
-    transport.close();
+    ta.delete(t.sessionId);
+    t.close();
   });
 });
 
 app.post("/mcp/messages", auth, async (req, res) => {
-  const transport = transports.get(req.query.sessionId);
-  if (!transport) return res.status(404).json({ error: "Session not found" });
-  await transport.handlePostMessage(req, res, req.body);
+  const t = ta.get(req.query.sessionId);
+  if (!t) return res.status(404).json({ error: "Session not found" });
+  await t.handlePostMessage(req, res, req.body);
 });
 
 app.listen(3000, "127.0.0.1", () => console.log("MCP listening"));
@@ -202,16 +202,18 @@ NAMEDEOF
 grep -q 'named.conf.local' /etc/named.conf \
   || echo 'include "/etc/named/named.conf.local";' >> /etc/named.conf
 
-sed -i 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' /etc/named.conf
-grep -q 'listen-on port 53' /etc/named.conf \
-  || sed -i '/^options/a\\tlisten-on port 53 { any; };' /etc/named.conf
+F=/etc/named.conf
+grep -q 'named.conf.local' $F \
+  || echo 'include "/etc/named/named.conf.local";' >> $F
 
-sed -i 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' /etc/named.conf
-grep -q 'allow-query' /etc/named.conf \
-  || sed -i '/^options/a\\tallow-query { any; };' /etc/named.conf
-
-grep -q 'allow-recursion' /etc/named.conf \
-  || sed -i '/^options/a\\tallow-recursion { 127.0.0.1; };' /etc/named.conf
+sed -i \
+  -e 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' \
+  -e 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' \
+  $F
+for DIRECTIVE in 'listen-on port 53 { any; }' 'allow-query { any; }' 'allow-recursion { 127.0.0.1; }'; do
+  grep -q "${DIRECTIVE%% *}" $F \
+    || sed -i "/^options/a\\\\t${DIRECTIVE};" $F
+done
 
 systemctl enable named && systemctl start named
 
