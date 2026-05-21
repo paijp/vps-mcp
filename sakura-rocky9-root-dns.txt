@@ -20,7 +20,7 @@ dnf install -y curl nginx epel-release bind-utils bind
 dnf install -y certbot python3-certbot-nginx
 dnf install -y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
-systemctl enable postfix && systemctl start postfix
+systemctl enable --now postfix
 sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.conf
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
@@ -212,7 +212,7 @@ for DIRECTIVE in 'listen-on port 53 { any; }' 'allow-query { any; }' 'allow-recu
     || sed -i "/^options/a\\\\t${DIRECTIVE};" $F
 done
 
-systemctl enable named && systemctl start named
+systemctl enable --now named
 
 sleep 10
 rndc querylog on
@@ -240,7 +240,7 @@ EOF
 mkdir -p /etc/mcp-server
 echo "@@@CLIENT_SECRET@@@" > /etc/mcp-server/secret
 chmod 600 /etc/mcp-server/secret
-systemctl daemon-reload && systemctl enable mcp-server && systemctl start mcp-server
+systemctl daemon-reload && systemctl enable --now mcp-server
 
 S="proxy_pass http://127.0.0.1:3000"
 P="proxy_set_header X-Forwarded-"
@@ -270,7 +270,7 @@ server {
     location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
-systemctl enable nginx && systemctl start nginx
+systemctl enable --now nginx
 nginx -t && systemctl reload nginx
 
 mkdir -p /etc/letsencrypt/renewal-hooks/deploy
@@ -292,7 +292,7 @@ for i in $(seq 1 30); do
     sleep 60
 done
 
-systemctl enable firewalld && systemctl start firewalld
+systemctl enable --now firewalld
 for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
 for X in 53/udp 53/tcp 3000/tcp; do firewall-cmd --permanent --add-port=$X; done
 firewall-cmd --reload
