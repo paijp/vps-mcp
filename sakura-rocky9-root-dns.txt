@@ -50,7 +50,7 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
@@ -88,8 +88,8 @@ app.post("/token", (req, res) => {
   try { unlinkSync(SECRET_FILE); } catch {}
   let token = getToken();
   if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
-  const cid = req.body.client_id || "unknown";
-  exec(`echo done | mail -s 'MCP token issued client_id=${cid}' @@@EMAIL@@@`);
+  const cid = /^[-_A-Za-z0-9]{1,64}$/.test(req.body.client_id) ? req.body.client_id : "invalid";
+  execFile("mail", ["-s", `MCP token issued client_id=${cid}`, "@@@EMAIL@@@"], {input: "done"});
   setTimeout(() => res.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
 
