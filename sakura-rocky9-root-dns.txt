@@ -87,8 +87,9 @@ app.post("/token", (req, res) => {
   try { unlinkSync(SECRET_FILE); } catch {}
   let token = getToken();
   if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
-  res.json({ access_token: token, token_type: "Bearer" });
-  exec("echo done | mail -s 'MCP token issued' @@@EMAIL@@@");
+  const cid = req.body.client_id || "unknown";
+  exec(`echo done | mail -s 'MCP token issued client_id=${cid}' @@@EMAIL@@@`);
+  setTimeout(() => res.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
 
 function auth(req, res, next) {
