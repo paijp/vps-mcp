@@ -17,11 +17,16 @@ echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 
 dnf update -y
 dnf config-manager --enable crb
-dnf install -y curl nginx epel-release bind-utils bind
+dnf install -y curl nginx epel-release bind-utils bind fail2ban
 dnf install -y certbot python3-certbot-nginx
 dnf install -y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
 systemctl enable --now postfix
+cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF'
+[sshd]
+enabled = true
+EOF
+systemctl enable --now fail2ban
 sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.conf
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
@@ -88,7 +93,7 @@ app.post("/token", (req, res) => {
   try { unlinkSync(SECRET_FILE); } catch {}
   let token = getToken();
   if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
-  const cid = /^[-_A-Za-z0-9]{1,64}$/.test(req.body.client_id) ? req.body.client_id : "invalid";
+  const cid = req.body.client_id || "unknown";
   execFile("mail", ["-s", `MCP token issued client_id=${cid}`, "@@@EMAIL@@@"], {input: "done"});
   setTimeout(() => res.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
