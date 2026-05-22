@@ -29,6 +29,7 @@ enabled = true
 EOF
 systemctl enable fail2ban
 systemctl start fail2ban
+systemctl restart fail2ban
 sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.conf
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
