@@ -265,7 +265,7 @@ server {
         ${P}Host \$host;
     }
     location /authorize { ${S}/authorize; }
-    location /token  { ${S}/token; }
+    location /token  { allow 160.79.104.0/21; deny all; ${S}/token; }
     location /health { ${S}/health; }
     location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
