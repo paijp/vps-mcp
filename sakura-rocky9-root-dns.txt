@@ -17,7 +17,8 @@ echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 
 dnf update -y
 dnf config-manager --enable crb
-dnf install -y curl nginx epel-release bind-utils bind fail2ban
+dnf install -y curl nginx epel-release bind-utils bind
+dnf install -y fail2ban
 dnf install -y certbot python3-certbot-nginx
 dnf install -y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
