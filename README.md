@@ -13,6 +13,7 @@
 - 不正な発行通知を受けた場合は、サーバを破棄して再構築してください
 - 多層防御は意図的に省略しています（破られた後の緩和策は意味がないため）
 - `/token` エンドポイントはclaude.aiのIPレンジ（160.79.104.0/21）のみ許可しています
+  （出典: https://platform.claude.com/docs/en/api/ip-addresses）
 
 ### CLIENT_SECRET と CLIENT_ID について
 
