@@ -364,7 +364,7 @@ done
 # 10. firewalld
 systemctl enable --now firewalld
 for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
-for X in 53/udp 53/tcp 3000/tcp; do firewall-cmd --permanent --add-port=$X; done
+for X in 53/udp 53/tcp; do firewall-cmd --permanent --add-port=$X; done
 firewall-cmd --reload
 
 # 11. 週次reboot (日曜3時・Persistent=false: 起動時スキップされる)
