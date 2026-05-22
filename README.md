@@ -44,7 +44,8 @@
 5. certbot（HTTP-01方式・Let's Encrypt SSL 自動取得・更新）
 6. firewalld（ssh/http/https/udp53/tcp53/tcp3000）
 7. dnf-automatic（セキュリティアップデート自動化）
-8. 週次reboot（日曜3時・カーネル更新適用）
+8. fail2ban（SSH ブルートフォース対策）
+9. 週次reboot（日曜3時・カーネル更新適用）
 
 ## パラメータ
 
@@ -144,7 +145,9 @@ rm /etc/mcp-server/token
 | token発行通知 | メール送信・タイトルにclient_idを含む（不審な接続を即座に検知可能） |
 | token返却 | 5秒遅延（メール配送完了の確率を上げるため） |
 | /tokenのIPアドレス制限 | claude.aiのIPレンジ（160.79.104.0/21）のみ許可 |
+| メール送信 | execFile()でシェルインジェクション対策 |
 | MCPログの標準出力 | Nginx access_log off（MCPパス） |
+| SSHブルートフォース対策 | fail2ban（5回失敗で10分バン） |
 | オープンリゾルバ | allow-recursion { 127.0.0.1; } |
 | セキュリティ自動更新 | dnf-automatic（security only） |
 | カーネル更新 | 週次reboot（日曜3時） |
