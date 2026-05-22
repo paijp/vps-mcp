@@ -53,11 +53,16 @@ echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 # 2. パッケージ
 dnf update -y
 dnf config-manager --enable crb
-dnf install -y curl nginx epel-release bind-utils bind
+dnf install -y curl nginx epel-release bind-utils bind fail2ban
 dnf install -y certbot python3-certbot-nginx
 dnf install -y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'  # IPv6なしVPSでの起動エラー対策
 systemctl enable --now postfix
+cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF'
+[sshd]
+enabled = true  # SSHへのブルートフォース攻撃を防ぐ
+EOF
+systemctl enable --now fail2ban
 sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.conf
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer  # セキュリティアップデート自動化
@@ -88,7 +93,7 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
-import { exec } from "child_process";  // 非同期: イベントループをブロックしない
+import { exec, execFile } from "child_process";  // 非同期: イベントループをブロックしない
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
