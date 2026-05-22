@@ -53,7 +53,7 @@ OAuth2 authorization_code + PKCEフローを使用しています。
 
 3. POST /token { client_secret: "...", code: "x", ... }
    → secretファイルと照合 → token返却・secretファイル削除
-   → tokenは最初の1回のみ発行（secretファイルが削除されるため）
+   → tokenは最初の1回のみ発行される（secretファイルが削除されるため）
    → token発行時にメール通知
 
 4. GET /mcp/sse { Authorization: Bearer <token> }
@@ -113,6 +113,16 @@ rm /etc/mcp-server/token
 
 参考: [さくらのサポート - ゾーン情報を編集したい](https://help.sakura.ad.jp/domain/2302/)
 
+## セキュリティポリシー
+
+このスクリプトはMCP経由でroot権限のシェル実行（`exec_command`）を提供します。これはバグではなく、Claudeに1台のVPSを完全に委ねるための仕様です。
+
+- token漏洩 = root権限漏洩と等価です
+- 防御は「CLIENT_SECRETの保護」と「token発行通知メールによる検知」の2段のみ
+- 不正な発行通知を受けた場合は、サーバを破棄して再構築してください
+- 多層防御は意図的に省略しています（破られた後の緩和策は意味がないため）
+- `/token` エンドポイントはclaude.aiのIPレンジ（160.79.104.0/21）のみ許可しています
+
 ## セキュリティ対応済み項目
 
 | 項目 | 対応内容 |
@@ -120,6 +130,7 @@ rm /etc/mcp-server/token
 | 認証方式 | OAuth2（authorization_code + PKCE）、client_secretで検証 |
 | token発行 | 初回のみ（secretファイル削除後は403） |
 | token発行通知 | メール送信（不審な接続を即座に検知可能） |
+| /tokenのIPアドレス制限 | claude.aiのIPレンジ（160.79.104.0/21）のみ許可 |
 | MCPログの標準出力 | Nginx access_log off（MCPパス） |
 | オープンリゾルバ | allow-recursion { 127.0.0.1; } |
 | セキュリティ自動更新 | dnf-automatic（security only） |
