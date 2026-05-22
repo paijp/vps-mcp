@@ -145,7 +145,7 @@ app.post("/token", (req, res) => {
   let token = getToken();
   if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
   const cid = req.body.client_id || "unknown";
-  exec(`echo done | mail -s 'MCP token issued client_id=${cid}' @@@EMAIL@@@`);
+  execFile("mail", ["-s", `MCP token issued client_id=${cid}`, "@@@EMAIL@@@"], {input: "done"});
   setTimeout(() => res.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
 
