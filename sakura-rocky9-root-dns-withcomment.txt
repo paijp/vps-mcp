@@ -96,7 +96,7 @@ import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
-import { exec, execFile } from "child_process";  // 非同期: イベントループをブロックしない
+import { exec, spawn } from "child_process";  // 非同期: イベントループをブロックしない
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
@@ -145,7 +145,8 @@ app.post("/token", (req, res) => {
   let token = getToken();
   if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
   const cid = req.body.client_id || "unknown";
-  execFile("mail", ["-s", `MCP token issued client_id=${cid}`, "@@@EMAIL@@@"], {input: "done"});
+  const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
+  m.stdin.end("done");  // 標準入力で本文を渡す
   setTimeout(() => res.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
 
