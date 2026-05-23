@@ -70,43 +70,43 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.get("/.well-known/oauth-authorization-server", (req, res) => {
-  const host = req.headers["x-forwarded-host"] || req.headers.host || req.hostname;
-  const proto = req.headers["x-forwarded-proto"] || req.protocol;
+app.get("/.well-known/oauth-authorization-server", (q,r) => {
+  const host = q.headers["x-forwarded-host"] || q.headers.host || q.hostname;
+  const proto = q.headers["x-forwarded-proto"] || q.protocol;
   const base = `${proto}://${host}`;
-  res.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
+  r.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
     token_endpoint: `${base}/token`,
     token_endpoint_auth_methods_supported: ["client_secret_post"],
     response_types_supported: ["code"],
     code_challenge_methods_supported: ["S256"] });
 });
 
-app.get("/authorize", (req, res) => {
-  const { redirect_uri, state } = req.query;
-  try { if (new URL(redirect_uri).host !== "claude.ai") return res.status(400).send(); } catch { return res.status(400).send(); }
-  res.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
+app.get("/authorize", (q,r) => {
+  const { redirect_uri, state } = q.query;
+  try { if (new URL(redirect_uri).host !== "claude.ai") return r.status(400).send(); } catch { return r.status(400).send(); }
+  r.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
 });
 
-const H=t=>crypto.createHash("sha256").update(t).digest("hex");
+const D=t=>crypto.createHash("sha256").update(t).digest("hex");
 
-app.post("/token", (req, res) => {
-  const { client_secret } = req.body;
-  let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return res.status(403).send(); }
-  if (client_secret !== secret) return res.status(403).send();
+app.post("/token", (q,r) => {
+  const { client_secret } = q.body;
+  let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return r.status(403).send(); }
+  if (client_secret !== secret) return r.status(403).send();
   try { unlinkSync(SFN); } catch {}
-  let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return res.status(403).send(); }
-  writeFileSync(`${MFN}/hash`, H(token), { mode: 0o600 });
+  let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return r.status(403).send(); }
+  writeFileSync(`${MFN}/hash`, D(token), { mode: 0o600 });
   try { unlinkSync(TFN); } catch {}
-  const cid = req.body.client_id || "unknown";
+  const cid = q.body.client_id || "unknown";
   const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
   m.stdin.end("done");
-  setTimeout(() => res.json({ access_token: token, token_type: "Bearer" }), 5000);
+  setTimeout(() => r.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
 
-function auth(req, res, next) {
-  const t = (req.headers.authorization || "").replace("Bearer ", "");
-  let h; try { h = readFileSync(`${MFN}/hash`, "utf8").trim(); } catch { return res.status(401).send(); }
-  const hb=Buffer.from(h),tb=Buffer.from(H(t));if(hb.length!==tb.length||!crypto.timingSafeEqual(hb,tb))return res.status(401).send();
+function auth(q,r,next) {
+  const t = (q.headers.authorization || "").replace("Bearer ", "");
+  let h; try { h = readFileSync(`${MFN}/hash`, "utf8").trim(); } catch { return r.status(401).send(); }
+  const hb=Buffer.from(h),tb=Buffer.from(D(t));if(hb.length!==tb.length||!crypto.timingSafeEqual(hb,tb))return r.status(401).send();
   next();
 }
 
@@ -119,7 +119,7 @@ function run(cmd, timeout = 30000) {
   });
 }
 
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/health", (_req, r) => r.json({ status: "ok" }));
 
 function createMcpServer() {
   const server = new McpServer({ name: "sakura-vps", version: "1.0.0" });
@@ -164,24 +164,24 @@ function createMcpServer() {
 
 const ta = new Map();
 
-app.get("/mcp/sse", auth, async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
+app.get("/mcp/sse", auth, async (q,r) => {
+  r.setHeader("Content-Type", "text/event-stream");
+  r.setHeader("Cache-Control", "no-cache");
+  r.setHeader("Connection", "keep-alive");
   const server = createMcpServer();
-  const t = new SSEServerTransport("/mcp/messages", res);
+  const t = new SSEServerTransport("/mcp/messages", r);
   ta.set(t.sessionId, t);
   await server.connect(t);
-  req.on("close", () => {
+  q.on("close", () => {
     ta.delete(t.sessionId);
     t.close();
   });
 });
 
-app.post("/mcp/messages", auth, async (req, res) => {
-  const t = ta.get(req.query.sessionId);
-  if (!t) return res.status(404).json({ error: "Session not found" });
-  await t.handlePostMessage(req, res, req.body);
+app.post("/mcp/messages", auth, async (q,r) => {
+  const t = ta.get(q.query.sessionId);
+  if (!t) return r.status(404).json({ error: "Session not found" });
+  await t.handlePostMessage(q, r, q.body);
 });
 
 app.listen(3000, "127.0.0.1", () => console.log("MCP listening"));
