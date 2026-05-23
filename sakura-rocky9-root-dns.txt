@@ -40,7 +40,7 @@ MCP_DIR="/opt/mcp-server"
 M=@modelcontextprotocol/sdk
 mkdir -p "$MCP_DIR"
 
-cat > "$MCP_DIR/package.json" << 'EOF'
+cat > "$MCP_DIR/package.json" << EOF
 {
   "name": "vps-mcp-server",
   "version": "1.0.0",
