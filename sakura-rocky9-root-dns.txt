@@ -14,12 +14,13 @@ mkswap /swapfile
 swapon /swapfile
 echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 
+Y="dnf install -y"
 dnf update -y
 dnf config-manager --enable crb
-dnf install -y curl nginx epel-release bind-utils bind
-dnf install -y fail2ban
-dnf install -y certbot python3-certbot-nginx
-dnf install -y postfix s-nail dnf-automatic
+$Y curl nginx epel-release bind-utils bind
+$Y fail2ban
+$Y certbot python3-certbot-nginx
+$Y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
 systemctl enable --now postfix
 cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF2'
@@ -34,19 +35,18 @@ sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
 
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-dnf install -y nodejs
+$Y nodejs
 
 MCP_DIR="/opt/mcp-server"
-M=@modelcontextprotocol/sdk
 mkdir -p "$MCP_DIR"
 
-cat > "$MCP_DIR/package.json" << EOF
+cat > "$MCP_DIR/package.json" << 'EOF'
 {
   "name": "vps-mcp-server",
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "${M}": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "express": "^4.18.0",
     "zod": "^3.22.0"
   }
@@ -55,8 +55,8 @@ EOF
 
 cat > "$MCP_DIR/index.mjs" << 'MCPEOF'
 import express from "express";
-import { McpServer } from "${M}/server/mcp.js";
-import { SSEServerTransport } from "${M}/server/sse.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { exec, spawn } from "child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
@@ -321,7 +321,13 @@ Persistent=false
 [Install]
 WantedBy=timers.target
 EOF
+cat > /etc/systemd/system/weekly-reboot.service << 'EOF'
+[Unit]
+Description=Weekly reboot
+[Service]
+Type=oneshot
+ExecStart=/sbin/reboot
+EOF
 systemctl enable --now weekly-reboot.timer
-printf '[Unit]\nDescription=Weekly reboot\n[Service]\nType=oneshot\nExecStart=/sbin/reboot\n' > /etc/systemd/system/weekly-reboot.service
 
 mail -s "VPS startup: ${DOMAIN}" "@@@EMAIL@@@" <<< "done"
