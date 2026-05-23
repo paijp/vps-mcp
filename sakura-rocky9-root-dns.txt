@@ -7,7 +7,6 @@ NS1_IP=@@@NS1_IP@@@
 
 exec > >(tee -a /var/log/mcp-startup.log) 2>&1
 
-hostnamectl set-hostname ${DOMAIN}
 
 fallocate -l 1G /swapfile
 chmod og-rwx /swapfile
@@ -23,10 +22,7 @@ dnf install -y certbot python3-certbot-nginx
 dnf install -y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
 systemctl enable --now postfix
-cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF'
-[sshd]
-enabled = true
-EOF
+printf '[sshd]\nenabled = true\n' > /etc/fail2ban/jail.d/sshd.conf
 systemctl enable fail2ban
 systemctl start fail2ban
 systemctl restart fail2ban
@@ -87,14 +83,15 @@ app.get("/authorize", (req, res) => {
   res.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
 });
 
+const H=t=>crypto.createHash("sha256").update(t).digest("hex");
+
 app.post("/token", (req, res) => {
   const { client_secret } = req.body;
   let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return res.status(403).send(); }
   if (client_secret !== secret) return res.status(403).send();
   try { unlinkSync(SFN); } catch {}
   let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return res.status(403).send(); }
-  const hash = crypto.createHash("sha256").update(token).digest("hex");
-  writeFileSync(`${BASE}/hash`, hash, { mode: 0o600 });
+  writeFileSync(`${BASE}/hash`, H(token), { mode: 0o600 });
   try { unlinkSync(TFN); } catch {}
   const cid = req.body.client_id || "unknown";
   const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
@@ -105,7 +102,7 @@ app.post("/token", (req, res) => {
 function auth(req, res, next) {
   const t = (req.headers.authorization || "").replace("Bearer ", "");
   let h; try { h = readFileSync(`${BASE}/hash`, "utf8").trim(); } catch { return res.status(401).send(); }
-  if (crypto.createHash("sha256").update(t).digest("hex") !== h) return res.status(401).send();
+  if (H(t) !== h) return res.status(401).send();
   next();
 }
 
@@ -226,7 +223,6 @@ done
 systemctl enable --now named
 
 sleep 10
-rndc querylog on
 rndc notify "${DOMAIN}"
 
 cd "$MCP_DIR" && npm install --production
@@ -251,11 +247,11 @@ EOF
 mkdir -p /etc/mcp-server
 echo "@@@CLIENT_SECRET@@@" > /etc/mcp-server/secret
 chmod 600 /etc/mcp-server/secret
-node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('/etc/mcp-server/token',c.randomUUID(),{mode:0o600});"
+uuidgen | tr -d '\n' > /etc/mcp-server/token && chmod 600 /etc/mcp-server/token
 systemctl daemon-reload && systemctl enable --now mcp-server
 
-S="proxy_pass http://127.0.0.1:3000"
-P="proxy_set_header X-Forwarded-"
+p="proxy_pass http://127.0.0.1:3000"
+s="proxy_set_header X-Forwarded-"
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
@@ -263,34 +259,35 @@ server {
     location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
     location ~ ^/mcp/(sse|messages) {
         access_log off;
-        ${S};
+        ${p};
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_set_header Connection '';
-        ${P}Proto \$scheme;
-        ${P}Host \$host;
+        ${s}Proto \$scheme;
+        ${s}Host \$host;
         proxy_read_timeout 3600s;
     }
     location /.well-known/oauth-authorization-server {
-        ${S}/.well-known/oauth-authorization-server;
-        ${P}Proto \$scheme;
-        ${P}Host \$host;
+        ${p}/.well-known/oauth-authorization-server;
+        ${s}Proto \$scheme;
+        ${s}Host \$host;
     }
-    location /authorize { ${S}/authorize; }
-    location /token  { allow 160.79.104.0/21; deny all; ${S}/token; }
-    location /health { ${S}/health; }
+    location /authorize { ${p}/authorize; }
+    location /token  { allow 160.79.104.0/21; deny all; ${p}/token; }
+    location /health { ${p}/health; }
     location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
 systemctl enable --now nginx
 nginx -t && systemctl reload nginx
 
-mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
+S=/etc/letsencrypt/renewal-hooks/deploy
+mkdir -p ${S}
+cat > ${S}/reload-nginx.sh << 'HOOKEOF'
 #!/bin/bash
 systemctl reload nginx
 HOOKEOF
-chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+chmod +x ${S}/reload-nginx.sh
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
 IP=""
@@ -309,22 +306,8 @@ for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
 for X in 53/udp 53/tcp; do firewall-cmd --permanent --add-port=$X; done
 firewall-cmd --reload
 
-cat > /etc/systemd/system/weekly-reboot.timer << 'EOF'
-[Unit]
-Description=Weekly reboot
-[Timer]
-OnCalendar=Sun 03:00
-Persistent=false
-[Install]
-WantedBy=timers.target
-EOF
-cat > /etc/systemd/system/weekly-reboot.service << 'EOF'
-[Unit]
-Description=Weekly reboot
-[Service]
-Type=oneshot
-ExecStart=/sbin/reboot
-EOF
+printf '[Unit]\nDescription=Weekly reboot\n[Timer]\nOnCalendar=Sun 03:00\nPersistent=false\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/weekly-reboot.timer
 systemctl enable --now weekly-reboot.timer
+printf '[Unit]\nDescription=Weekly reboot\n[Service]\nType=oneshot\nExecStart=/sbin/reboot\n' > /etc/systemd/system/weekly-reboot.service
 
 mail -s "VPS startup: ${DOMAIN}" "@@@EMAIL@@@" <<< "done"
