@@ -22,7 +22,10 @@ dnf install -y certbot python3-certbot-nginx
 dnf install -y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
 systemctl enable --now postfix
-printf '[sshd]\nenabled = true\n' > /etc/fail2ban/jail.d/sshd.conf
+cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF2'
+[sshd]
+enabled = true
+EOF2
 systemctl enable fail2ban
 systemctl start fail2ban
 systemctl restart fail2ban
@@ -34,6 +37,7 @@ curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
 dnf install -y nodejs
 
 MCP_DIR="/opt/mcp-server"
+M=@modelcontextprotocol/sdk
 mkdir -p "$MCP_DIR"
 
 cat > "$MCP_DIR/package.json" << 'EOF'
@@ -42,7 +46,7 @@ cat > "$MCP_DIR/package.json" << 'EOF'
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "${M}": "^1.0.0",
     "express": "^4.18.0",
     "zod": "^3.22.0"
   }
@@ -51,8 +55,8 @@ EOF
 
 cat > "$MCP_DIR/index.mjs" << 'MCPEOF'
 import express from "express";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { McpServer } from "${M}/server/mcp.js";
+import { SSEServerTransport } from "${M}/server/sse.js";
 import { z } from "zod";
 import { exec, spawn } from "child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
@@ -247,11 +251,11 @@ EOF
 mkdir -p /etc/mcp-server
 echo "@@@CLIENT_SECRET@@@" > /etc/mcp-server/secret
 chmod 600 /etc/mcp-server/secret
-uuidgen | tr -d '\n' > /etc/mcp-server/token && chmod 600 /etc/mcp-server/token
+node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('/etc/mcp-server/token',c.randomUUID(),{mode:0o600});"
 systemctl daemon-reload && systemctl enable --now mcp-server
 
-p="proxy_pass http://127.0.0.1:3000"
-s="proxy_set_header X-Forwarded-"
+P="proxy_pass http://127.0.0.1:3000"
+S="proxy_set_header X-Forwarded-"
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
@@ -259,22 +263,22 @@ server {
     location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
     location ~ ^/mcp/(sse|messages) {
         access_log off;
-        ${p};
+        ${P};
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_set_header Connection '';
-        ${s}Proto \$scheme;
-        ${s}Host \$host;
+        ${S}Proto \$scheme;
+        ${S}Host \$host;
         proxy_read_timeout 3600s;
     }
     location /.well-known/oauth-authorization-server {
-        ${p}/.well-known/oauth-authorization-server;
-        ${s}Proto \$scheme;
-        ${s}Host \$host;
+        ${P}/.well-known/oauth-authorization-server;
+        ${S}Proto \$scheme;
+        ${S}Host \$host;
     }
-    location /authorize { ${p}/authorize; }
-    location /token  { allow 160.79.104.0/21; deny all; ${p}/token; }
-    location /health { ${p}/health; }
+    location /authorize { ${P}/authorize; }
+    location /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
+    location /health { ${P}/health; }
     location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
@@ -306,7 +310,15 @@ for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
 for X in 53/udp 53/tcp; do firewall-cmd --permanent --add-port=$X; done
 firewall-cmd --reload
 
-printf '[Unit]\nDescription=Weekly reboot\n[Timer]\nOnCalendar=Sun 03:00\nPersistent=false\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/weekly-reboot.timer
+cat > /etc/systemd/system/weekly-reboot.timer << 'EOF'
+[Unit]
+Description=Weekly reboot
+[Timer]
+OnCalendar=Sun 03:00
+Persistent=false
+[Install]
+WantedBy=timers.target
+EOF
 systemctl enable --now weekly-reboot.timer
 printf '[Unit]\nDescription=Weekly reboot\n[Service]\nType=oneshot\nExecStart=/sbin/reboot\n' > /etc/systemd/system/weekly-reboot.service
 
