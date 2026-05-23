@@ -62,9 +62,9 @@ import { exec, spawn } from "child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
-const BASE = "/etc/mcp-server";
-const SFN  = `${BASE}/secret`;
-const TFN  = `${BASE}/token`;
+const MFN = "/etc/mcp-server";
+const SFN  = `${MFN}/secret`;
+const TFN  = `${MFN}/token`;
 
 const app = express();
 app.use(express.json());
@@ -95,7 +95,7 @@ app.post("/token", (req, res) => {
   if (client_secret !== secret) return res.status(403).send();
   try { unlinkSync(SFN); } catch {}
   let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return res.status(403).send(); }
-  writeFileSync(`${BASE}/hash`, H(token), { mode: 0o600 });
+  writeFileSync(`${MFN}/hash`, H(token), { mode: 0o600 });
   try { unlinkSync(TFN); } catch {}
   const cid = req.body.client_id || "unknown";
   const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
@@ -105,8 +105,8 @@ app.post("/token", (req, res) => {
 
 function auth(req, res, next) {
   const t = (req.headers.authorization || "").replace("Bearer ", "");
-  let h; try { h = readFileSync(`${BASE}/hash`, "utf8").trim(); } catch { return res.status(401).send(); }
-  if (H(t) !== h) return res.status(401).send();
+  let h; try { h = readFileSync(`${MFN}/hash`, "utf8").trim(); } catch { return res.status(401).send(); }
+  const hb=Buffer.from(h),tb=Buffer.from(H(t));if(hb.length!==tb.length||!crypto.timingSafeEqual(hb,tb))return res.status(401).send();
   next();
 }
 
@@ -248,20 +248,22 @@ StandardError=append:/var/log/mcp-server.log
 WantedBy=multi-user.target
 EOF
 
-mkdir -p /etc/mcp-server
-echo "@@@CLIENT_SECRET@@@" > /etc/mcp-server/secret
-chmod 600 /etc/mcp-server/secret
-node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('/etc/mcp-server/token',c.randomUUID(),{mode:0o600});"
+MFN=/etc/mcp-server
+mkdir -p $MFN
+echo "@@@CLIENT_SECRET@@@" > $MFN/secret
+chmod 600 $MFN/secret
+node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('$MFN/token',c.randomUUID(),{mode:0o600});"
 systemctl daemon-reload && systemctl enable --now mcp-server
 
+L=location
 P="proxy_pass http://127.0.0.1:3000"
 S="proxy_set_header X-Forwarded-"
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
     server_name ${DOMAIN};
-    location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
-    location ~ ^/mcp/(sse|messages) {
+    ${L} /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
+    ${L} ~ ^/mcp/(sse|messages) {
         access_log off;
         ${P};
         proxy_http_version 1.1;
@@ -271,15 +273,15 @@ server {
         ${S}Host \$host;
         proxy_read_timeout 3600s;
     }
-    location /.well-known/oauth-authorization-server {
+    ${L} /.well-known/oauth-authorization-server {
         ${P}/.well-known/oauth-authorization-server;
         ${S}Proto \$scheme;
         ${S}Host \$host;
     }
-    location /authorize { ${P}/authorize; }
-    location /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
-    location /health { ${P}/health; }
-    location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
+    ${L} /authorize { ${P}/authorize; }
+    ${L} /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
+    ${L} /health { ${P}/health; }
+    ${L} / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
 systemctl enable --now nginx
