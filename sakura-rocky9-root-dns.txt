@@ -62,15 +62,13 @@ import { exec, spawn } from "child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
-const BASE        = "/etc/mcp-server";
-const SECRET_FILE = `${BASE}/secret`;
-const TOKEN_FILE  = `${BASE}/token`;
+const BASE = "/etc/mcp-server";
+const SFN  = `${BASE}/secret`;
+const TFN  = `${BASE}/token`;
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-function getToken() { try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return null; } }
 
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const host = req.headers["x-forwarded-host"] || req.headers.host || req.hostname;
@@ -91,11 +89,13 @@ app.get("/authorize", (req, res) => {
 
 app.post("/token", (req, res) => {
   const { client_secret } = req.body;
-  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { return res.status(403).send(); }
+  let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return res.status(403).send(); }
   if (client_secret !== secret) return res.status(403).send();
-  try { unlinkSync(SECRET_FILE); } catch {}
-  let token = getToken();
-  if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
+  try { unlinkSync(SFN); } catch {}
+  let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return res.status(403).send(); }
+  const hash = crypto.createHash("sha256").update(token).digest("hex");
+  writeFileSync(`${BASE}/hash`, hash, { mode: 0o600 });
+  try { unlinkSync(TFN); } catch {}
   const cid = req.body.client_id || "unknown";
   const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
   m.stdin.end("done");
@@ -104,8 +104,8 @@ app.post("/token", (req, res) => {
 
 function auth(req, res, next) {
   const t = (req.headers.authorization || "").replace("Bearer ", "");
-  const s = getToken();
-  if (!s || t !== s) return res.status(401).send();
+  let h; try { h = readFileSync(`${BASE}/hash`, "utf8").trim(); } catch { return res.status(401).send(); }
+  if (crypto.createHash("sha256").update(t).digest("hex") !== h) return res.status(401).send();
   next();
 }
 
@@ -251,6 +251,7 @@ EOF
 mkdir -p /etc/mcp-server
 echo "@@@CLIENT_SECRET@@@" > /etc/mcp-server/secret
 chmod 600 /etc/mcp-server/secret
+node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('/etc/mcp-server/token',c.randomUUID(),{mode:0o600});"
 systemctl daemon-reload && systemctl enable --now mcp-server
 
 S="proxy_pass http://127.0.0.1:3000"
