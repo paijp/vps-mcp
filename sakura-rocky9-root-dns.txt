@@ -93,11 +93,12 @@ app.post("/token", (q,r) => {
   const { client_secret } = q.body;
   let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return r.status(403).send(); }
   if (client_secret !== secret) return r.status(403).send();
+  const cid = q.body.client_id;
+  if (!cid) return r.status(403).send();
   try { unlinkSync(SFN); } catch {}
   let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return r.status(403).send(); }
   writeFileSync(`${MFN}/hash`, D(token), { mode: 0o600 });
   try { unlinkSync(TFN); } catch {}
-  const cid = q.body.client_id || "unknown";
   const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
   m.stdin.end("done");
   setTimeout(() => r.json({ access_token: token, token_type: "Bearer" }), 5000);
