@@ -23,10 +23,10 @@ $Y certbot python3-certbot-nginx
 $Y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
 systemctl enable --now postfix
-cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF2'
+cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF'
 [sshd]
 enabled = true
-EOF2
+EOF
 systemctl enable fail2ban
 systemctl start fail2ban
 systemctl restart fail2ban
@@ -53,7 +53,7 @@ cat > "$MCP_DIR/package.json" << 'EOF'
 }
 EOF
 
-cat > "$MCP_DIR/index.mjs" << 'MCPEOF'
+cat > "$MCP_DIR/index.mjs" << 'EOF'
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -93,7 +93,7 @@ app.post("/token", (q,r) => {
   const { client_secret } = q.body;
   let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return r.status(403).send(); }
   if (client_secret !== secret) return r.status(403).send();
-  const cid = q.body.client_id;
+  const cid = +q.body.client_id;
   if (!cid) return r.status(403).send();
   try { unlinkSync(SFN); } catch {}
   let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return r.status(403).send(); }
@@ -186,12 +186,12 @@ app.post("/mcp/messages", auth, async (q,r) => {
 });
 
 app.listen(3000, "127.0.0.1", () => console.log("MCP listening"));
-MCPEOF
+EOF
 
 SERIAL=$(date +%Y%m%d01)
 mkdir -p /etc/named
 
-cat > /var/named/${DOMAIN}.zone << ZONEOF
+cat > /var/named/${DOMAIN}.zone << EOF
 \$TTL 3600
 @ IN SOA ns1.${DOMAIN}. admin.${DOMAIN}. (
     ${SERIAL} 3600 900 604800 300 )
@@ -200,17 +200,17 @@ cat > /var/named/${DOMAIN}.zone << ZONEOF
 @ IN NS ns2.dns.ne.jp.
 @ IN A  ${NS1_IP}
 ns1 IN A ${NS1_IP}
-ZONEOF
+EOF
 chown named:named /var/named/${DOMAIN}.zone
 
-cat > /etc/named/named.conf.local << NAMEDEOF
+cat > /etc/named/named.conf.local << EOF
 zone "${DOMAIN}" {
     type master;
     file "/var/named/${DOMAIN}.zone";
     allow-transfer { 210.188.224.9; 210.224.172.13; };
     also-notify   { 61.211.236.1; 133.167.21.1; };
 };
-NAMEDEOF
+EOF
 
 F=/etc/named.conf
 grep -q 'named.conf.local' $F \
@@ -290,10 +290,10 @@ nginx -t && systemctl reload nginx
 
 S=/etc/letsencrypt/renewal-hooks/deploy
 mkdir -p ${S}
-cat > ${S}/reload-nginx.sh << 'HOOKEOF'
+cat > ${S}/reload-nginx.sh << 'EOF'
 #!/bin/bash
 systemctl reload nginx
-HOOKEOF
+EOF
 chmod +x ${S}/reload-nginx.sh
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
