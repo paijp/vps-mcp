@@ -1,83 +1,57 @@
 #!/bin/bash
 # https://github.com/paijp/vps-mcp
-# Claude.ai MCP サーバー構築 for さくらのVPS (RockyLinux 9)
-# パラメータ: DOMAIN / NS1_IP / CLIENT_SECRET(@@@CLIENT_SECRET@@@) / EMAIL(@@@EMAIL@@@)
-# このコードは Claude Sonnet 4.6 が書きました。
-#
-# セキュリティポリシー:
-#   token漏洩 = root権限漏洩と等価です。
-#   /tokenエンドポイントはclaude.aiのIPレンジ(160.79.104.0/21)のみ許可。
-#   出典: https://platform.claude.com/docs/en/api/ip-addresses
-#   CLIENT_SECRET・CLIENT_IDはサーバ構築のたびに新規ランダム生成してください。
-#
-# 概要:
-#   1. swapfile 1GB
-#   2. パッケージ（nginx/bind/certbot/postfix/dnf-automatic）
-#   3. Node.js 20
-#   4. MCPサーバー (exec_command/nginx_reload)
-#      OAuth2認証 (authorization_code + PKCE):
-#        /.well-known: claude.aiがエンドポイントを自動検出
-#        /authorize:  redirect_uriにcode=xでリダイレクト（素通り）
-#        /token:      secretファイルと照合→secretファイル削除
-#                     tokenは初回の1回のみ発行（secretファイル削除後は403）
-#                     token発行通知メール送信（タイトルにclient_id=***を含む）
-#                     5秒後にtoken返却（メール配送完了の確率を上げるため）
-#        auth:        tokenファイルと一致する場合のみ通過
-#        再接続: secretファイルを再作成すると同じtokenが返される
-#        リセット: rm /etc/mcp-server/token で即座にアクセス不可
-#   5. BIND プライマリDNS（allow-recursionでオープンリゾルバ防止）
-#   6. npm install
-#   7. systemdサービス
-#   8. Nginx（MCPパスはaccess_log off・各OAuth2エンドポイントを公開）
-#      /tokenはclaude.aiのIPレンジ(160.79.104.0/21)のみ許可
-#   9. SSL: DNS解決を最大30分待機してcertbot実行
-#  10. firewalld
-#  11. 週次reboot（日曜3時・Persistent=false）
-#  12. スタートアップ完了メール送信
+# さくらのVPS（RockyLinux 9）スタートアップスクリプト
+# このファイルはコメントあり版（参照・編集用）。コメント行を除去するとコメントなし版と一致する。
 set -euo pipefail
 
+# @@@...@@@ はさくらのマイスクリプトのパラメータ置換プレースホルダ
 DOMAIN=@@@DOMAIN@@@
 NS1_IP=@@@NS1_IP@@@
 
+# 標準出力・標準エラーをログに追記しつつ画面にも出す
 exec > >(tee -a /var/log/mcp-startup.log) 2>&1
 
-hostnamectl set-hostname ${DOMAIN}
 
-# 1. swapfile
+# --- swap（1GB）。メモリの少ないVPS向けに確保 ---
 fallocate -l 1G /swapfile
 chmod og-rwx /swapfile
 mkswap /swapfile
 swapon /swapfile
 echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 
-# 2. パッケージ
+# --- パッケージインストール。Y は dnf install -y の短縮 ---
+Y="dnf install -y"
 dnf update -y
 dnf config-manager --enable crb
-dnf install -y curl nginx epel-release bind-utils bind
-dnf install -y fail2ban
-dnf install -y certbot python3-certbot-nginx
-dnf install -y postfix s-nail dnf-automatic
-postconf -e 'inet_protocols = ipv4'  # IPv6なしVPSでの起動エラー対策
+$Y curl nginx epel-release bind-utils bind
+$Y fail2ban
+$Y certbot python3-certbot-nginx
+$Y postfix s-nail dnf-automatic
+# postfixはIPv4のみ（IPv6未設定環境での起動失敗回避）
+postconf -e 'inet_protocols = ipv4'
 systemctl enable --now postfix
+# fail2ban: sshdジェイルを有効化
 cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF'
 [sshd]
-enabled = true  # SSHへのブルートフォース攻撃を防ぐ
+enabled = true
 EOF
+# enable→start→restartの順（enable --nowではソケット未生成エラーが出るため分割）
 systemctl enable fail2ban
 systemctl start fail2ban
 systemctl restart fail2ban
+# dnf-automatic: セキュリティ更新のみ自動適用
 sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.conf
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
-systemctl enable --now dnf-automatic-install.timer  # セキュリティアップデート自動化
+systemctl enable --now dnf-automatic-install.timer
 
-# 3. Node.js 20
+# --- Node.js 20 ---
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-dnf install -y nodejs
+$Y nodejs
 
-# 4. MCPサーバー
 MCP_DIR="/opt/mcp-server"
 mkdir -p "$MCP_DIR"
 
+# --- MCPサーバーのpackage.json ---
 cat > "$MCP_DIR/package.json" << 'EOF'
 {
   "name": "vps-mcp-server",
@@ -91,74 +65,77 @@ cat > "$MCP_DIR/package.json" << 'EOF'
 }
 EOF
 
-cat > "$MCP_DIR/index.mjs" << 'MCPEOF'
+# --- MCPサーバー本体（Node ESM）。ヒアドキュメントはクォート付きで変数展開を抑止 ---
+cat > "$MCP_DIR/index.mjs" << 'EOF'
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
-import { exec, spawn } from "child_process";  // 非同期: イベントループをブロックしない
+import { exec, spawn } from "child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
-const BASE        = "/etc/mcp-server";
-const SECRET_FILE = `${BASE}/secret`;
-const TOKEN_FILE  = `${BASE}/token`;
+// MFN: 認証ファイル置き場 / SFN: secret / TFN: token
+const MFN = "/etc/mcp-server";
+const SFN  = `${MFN}/secret`;
+const TFN  = `${MFN}/token`;
 
 const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));  // form-encoded body対応
+app.use(express.urlencoded({ extended: true }));
 
-// tokenファイルを都度読み込む（rm tokenで即座に再認証が可能）
-function getToken() { try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return null; } }
-
-// OAuth2メタデータ: claude.aiが読んでclient_secret_postフローを自動選択
-app.get("/.well-known/oauth-authorization-server", (req, res) => {
-  const host = req.headers["x-forwarded-host"] || req.headers.host || req.hostname;
-  const proto = req.headers["x-forwarded-proto"] || req.protocol;
+// OAuth2メタデータ。claude.aiがエンドポイントを自動検出するために参照する
+app.get("/.well-known/oauth-authorization-server", (q,r) => {
+  const host = q.headers["x-forwarded-host"] || q.headers.host || q.hostname;
+  const proto = q.headers["x-forwarded-proto"] || q.protocol;
   const base = `${proto}://${host}`;
-  res.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
+  r.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
     token_endpoint: `${base}/token`,
     token_endpoint_auth_methods_supported: ["client_secret_post"],
     response_types_supported: ["code"],
     code_challenge_methods_supported: ["S256"] });
 });
 
-// /authorize: ブラウザをredirect_uriにcodeXでリダイレクト（素通り）
-app.get("/authorize", (req, res) => {
-  const { redirect_uri, state } = req.query;
-  if (!redirect_uri) return res.status(400).send();
-  res.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
+// /authorize: redirect_uriがclaude.aiのときだけcodeを付けてリダイレクト（素通り）
+app.get("/authorize", (q,r) => {
+  const { redirect_uri, state } = q.query;
+  try { if (new URL(redirect_uri).host !== "claude.ai") return r.status(400).send(); } catch { return r.status(400).send(); }
+  r.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
 });
 
-// /token:
-//   secretファイルがなければ403
-//   client_secretが不一致でも403
-//   一致したらsecretファイルを削除（以降は403になる）
-//   tokenファイルがなければ新規生成、あれば既存値を返す
-//   token発行通知メール送信（タイトルにclient_id=***を含む）
-//   5秒後にtoken返却（メール配送完了の確率を上げるため）
-app.post("/token", (req, res) => {
-  const { client_secret } = req.body;
-  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { return res.status(403).send(); }
-  if (client_secret !== secret) return res.status(403).send();
-  try { unlinkSync(SECRET_FILE); } catch {}  // 認証成功したら即座に削除
-  let token = getToken();
-  if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
-  const cid = req.body.client_id || "unknown";
+// D: SHA-256ハッシュ。tokenは平文保存せずハッシュで照合する
+const D=t=>crypto.createHash("sha256").update(t).digest("hex");
+
+// /token: client_secret照合→token返却。発行はsecretファイルがある初回のみ
+app.post("/token", (q,r) => {
+  const { client_secret } = q.body;
+  let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return r.status(403).send(); }
+  if (client_secret !== secret) return r.status(403).send();
+  // client_idを数値化。不正アクセス検知メールの件名汚染を防ぐため数値以外は403
+  const cid = +q.body.client_id;
+  if (!cid) return r.status(403).send();
+  // 認証成功したらsecretを即削除（token発行は1回限りにする）
+  try { unlinkSync(SFN); } catch {}
+  let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return r.status(403).send(); }
+  // tokenのハッシュを保存し、token平文ファイルは削除
+  writeFileSync(`${MFN}/hash`, D(token), { mode: 0o600 });
+  try { unlinkSync(TFN); } catch {}
+  // token発行をメール通知（不審な接続を検知するため）
   const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
-  m.stdin.end("done");  // 標準入力で本文を渡す
-  setTimeout(() => res.json({ access_token: token, token_type: "Bearer" }), 5000);
+  m.stdin.end("done");
+  // メール配送完了の確率を上げるため5秒後にtoken返却
+  setTimeout(() => r.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
 
-// Bearer token認証: tokenファイルと照合
-function auth(req, res, next) {
-  const t = (req.headers.authorization || "").replace("Bearer ", "");
-  const s = getToken();
-  if (!s || t !== s) return res.status(401).send();
+// Bearer token認証。保存済みハッシュと突き合わせ、timingSafeEqualで比較
+function auth(q,r,next) {
+  const t = (q.headers.authorization || "").replace("Bearer ", "");
+  let h; try { h = readFileSync(`${MFN}/hash`, "utf8").trim(); } catch { return r.status(401).send(); }
+  const hb=Buffer.from(h),tb=Buffer.from(D(t));if(hb.length!==tb.length||!crypto.timingSafeEqual(hb,tb))return r.status(401).send();
   next();
 }
 
-// 共通のPromiseラッパー
+// シェルコマンド実行ヘルパ。30秒でタイムアウト
 function run(cmd, timeout = 30000) {
   return new Promise((resolve, reject) => {
     exec(cmd, { timeout, maxBuffer: 1024*1024 }, (err, stdout, stderr) => {
@@ -168,12 +145,13 @@ function run(cmd, timeout = 30000) {
   });
 }
 
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/health", (_req, r) => r.json({ status: "ok" }));
 
+// MCPサーバーのツール定義
 function createMcpServer() {
   const server = new McpServer({ name: "sakura-vps", version: "1.0.0" });
 
-  // ツール1: 任意コマンド実行
+  // ツール1: 任意のシェルコマンドをroot権限で実行
   server.tool(
     "exec_command",
     "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、その場合notifyは10分程度かかる場合がある。",
@@ -194,18 +172,18 @@ function createMcpServer() {
     }
   );
 
-  // ツール2: Nginxリロード専用（SSE切断を事前応答してから実行）
+  // ツール2: nginxリロード専用。設定テスト後2秒でreload（SSE切断のため別扱い）
   server.tool(
     "nginx_reload",
     "Nginxをリロードする専用ツール。nginx reload/restartは必ずこれを使うこと、2秒後SSEセッションが切断されるので再接続が必要。",
     {},
     async () => {
       try {
-        await run("nginx -t");  // 設定テストを先に実行
+        await run("nginx -t");
       } catch (e) {
         return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
       }
-      setTimeout(() => run("nginx -s reload"), 2000);  // 2秒後に実行
+      setTimeout(() => run("nginx -s reload"), 2000);
       return { content: [{ type: "text", text: "nginx設定テストOK、2秒後にreload。SSEセッションが切断されるので再接続してください。" }] };
     }
   );
@@ -213,36 +191,41 @@ function createMcpServer() {
   return server;
 }
 
+// SSEトランスポートをsessionIdで管理
 const ta = new Map();
 
-app.get("/mcp/sse", auth, async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
+// SSE接続。接続ごとにMCPサーバーインスタンスを生成
+app.get("/mcp/sse", auth, async (q,r) => {
+  r.setHeader("Content-Type", "text/event-stream");
+  r.setHeader("Cache-Control", "no-cache");
+  r.setHeader("Connection", "keep-alive");
   const server = createMcpServer();
-  const t = new SSEServerTransport("/mcp/messages", res);
+  const t = new SSEServerTransport("/mcp/messages", r);
   ta.set(t.sessionId, t);
   await server.connect(t);
-  req.on("close", () => {
+  q.on("close", () => {
     ta.delete(t.sessionId);
     t.close();
   });
 });
 
-app.post("/mcp/messages", auth, async (req, res) => {
-  const t = ta.get(req.query.sessionId);
-  if (!t) return res.status(404).json({ error: "Session not found" });
-  await t.handlePostMessage(req, res, req.body);
+// クライアントからのメッセージをsessionIdに対応するトランスポートへ渡す
+app.post("/mcp/messages", auth, async (q,r) => {
+  const t = ta.get(q.query.sessionId);
+  if (!t) return r.status(404).json({ error: "Session not found" });
+  await t.handlePostMessage(q, r, q.body);
 });
 
+// ローカルホストのみで待ち受け（外部公開はnginxリバースプロキシ経由）
 app.listen(3000, "127.0.0.1", () => console.log("MCP listening"));
-MCPEOF
+EOF
 
-# 5. BIND (プライマリDNS)
+# --- BIND（プライマリDNS）のゾーンファイル生成。SERIALは日付ベース ---
 SERIAL=$(date +%Y%m%d01)
 mkdir -p /etc/named
 
-cat > /var/named/${DOMAIN}.zone << ZONEOF
+# クォートなしヒアドキュメント。${DOMAIN}等を展開し、\$TTLはエスケープでBIND用に残す
+cat > /var/named/${DOMAIN}.zone << EOF
 \$TTL 3600
 @ IN SOA ns1.${DOMAIN}. admin.${DOMAIN}. (
     ${SERIAL} 3600 900 604800 300 )
@@ -251,23 +234,25 @@ cat > /var/named/${DOMAIN}.zone << ZONEOF
 @ IN NS ns2.dns.ne.jp.
 @ IN A  ${NS1_IP}
 ns1 IN A ${NS1_IP}
-ZONEOF
+EOF
 chown named:named /var/named/${DOMAIN}.zone
 
-cat > /etc/named/named.conf.local << NAMEDEOF
+# ゾーン定義。allow-transfer/also-notifyはさくらのセカンダリDNSの固定IP
+cat > /etc/named/named.conf.local << EOF
 zone "${DOMAIN}" {
     type master;
     file "/var/named/${DOMAIN}.zone";
-    allow-transfer { 210.188.224.9; 210.224.172.13; };  # さくらゾーン転送元IP
-    also-notify   { 61.211.236.1; 133.167.21.1; };      # ns1/ns2.dns.ne.jp
+    allow-transfer { 210.188.224.9; 210.224.172.13; };
+    also-notify   { 61.211.236.1; 133.167.21.1; };
 };
-NAMEDEOF
+EOF
 
+# named.confにlocal設定をincを追記し、外部問い合わせを許可
 F=/etc/named.conf
 grep -q 'named.conf.local' $F \
   || echo 'include "/etc/named/named.conf.local";' >> $F
 
-# listen-on: 外部からのDNS問い合わせを受け付ける
+# listen-on/allow-queryをany化。allow-recursionはローカルのみ（オープンリゾルバ防止）
 sed -i \
   -e 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' \
   -e 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' \
@@ -279,14 +264,13 @@ done
 
 systemctl enable --now named
 
+# ゾーン読み込みを待ってからセカンダリへnotify
 sleep 10
-rndc querylog on
 rndc notify "${DOMAIN}"
 
-# 6. npm install
 cd "$MCP_DIR" && npm install --production
 
-# 7. systemdサービス
+# --- MCPサーバーのsystemdサービス。クォートなしで${MCP_DIR}を展開 ---
 cat > /etc/systemd/system/mcp-server.service << EOF
 [Unit]
 Description=Claude.ai MCP Server
@@ -304,51 +288,58 @@ StandardError=append:/var/log/mcp-server.log
 WantedBy=multi-user.target
 EOF
 
-mkdir -p /etc/mcp-server
-echo "@@@CLIENT_SECRET@@@" > /etc/mcp-server/secret  # 認証後に自動削除される
-chmod 600 /etc/mcp-server/secret
+# --- 認証ファイル初期化。secretはCLIENT_SECRET、tokenはランダムUUIDを生成 ---
+MFN=/etc/mcp-server
+mkdir -p $MFN
+echo "@@@CLIENT_SECRET@@@" > $MFN/secret
+chmod 600 $MFN/secret
+node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('$MFN/token',c.randomUUID(),{mode:0o600});"
 systemctl daemon-reload && systemctl enable --now mcp-server
 
-# 8. Nginx
-S="proxy_pass http://127.0.0.1:3000"
-P="proxy_set_header X-Forwarded-"
+# --- nginxリバースプロキシ。L/P/Sは設定内の繰り返しを短縮する変数 ---
+L=location
+P="proxy_pass http://127.0.0.1:3000"
+S="proxy_set_header X-Forwarded-"
+# クォートなしヒアドキュメント。${L}等はshellで展開、\$schemeはnginxに残す
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
     server_name ${DOMAIN};
-    location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
-    location ~ ^/mcp/(sse|messages) {
-        access_log off;  # MCPログの標準出力をオフ
-        ${S};
+    ${L} /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
+    ${L} ~ ^/mcp/(sse|messages) {
+        access_log off;
+        ${P};
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_set_header Connection '';
-        ${P}Proto \$scheme;
-        ${P}Host \$host;
+        ${S}Proto \$scheme;
+        ${S}Host \$host;
         proxy_read_timeout 3600s;
     }
-    location /.well-known/oauth-authorization-server {
-        ${S}/.well-known/oauth-authorization-server;
-        ${P}Proto \$scheme;  # X-Forwarded-*を転送（hostnameが127.0.0.1になる問題対応）
-        ${P}Host \$host;
+    ${L} /.well-known/oauth-authorization-server {
+        ${P}/.well-known/oauth-authorization-server;
+        ${S}Proto \$scheme;
+        ${S}Host \$host;
     }
-    location /authorize { ${S}/authorize; }
-    location /token  { allow 160.79.104.0/21; deny all; ${S}/token; }  # claude.aiのIPのみ許可
-    location /health { ${S}/health; }
-    location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
+    ${L} /authorize { ${P}/authorize; }
+    ${L} /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
+    ${L} /health { ${P}/health; }
+    ${L} / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
 systemctl enable --now nginx
 nginx -t && systemctl reload nginx
 
-# 9. SSL (HTTP-01方式。DNS解決を最大30分待機してcertbot実行)
-mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
+# --- Let's Encrypt更新フック。証明書更新後にnginxをリロード ---
+S=/etc/letsencrypt/renewal-hooks/deploy
+mkdir -p ${S}
+cat > ${S}/reload-nginx.sh << 'EOF'
 #!/bin/bash
-systemctl reload nginx  # 証明書更新後にNginxに反映
-HOOKEOF
-chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+systemctl reload nginx
+EOF
+chmod +x ${S}/reload-nginx.sh
 
+# --- 証明書取得。DNS浸透を待ち、自分のIPに解決できたらcertbot実行 ---
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
 IP=""
 for i in $(seq 1 30); do
@@ -361,13 +352,13 @@ for i in $(seq 1 30); do
     sleep 60
 done
 
-# 10. firewalld
+# --- ファイアウォール。ssh/http/httpsとDNS用53番を許可 ---
 systemctl enable --now firewalld
 for X in ssh http https; do firewall-cmd --permanent --add-service=$X; done
 for X in 53/udp 53/tcp; do firewall-cmd --permanent --add-port=$X; done
 firewall-cmd --reload
 
-# 11. 週次reboot (日曜3時・Persistent=false: 起動時スキップされる)
+# --- 週次再起動（日曜3時）。カーネル更新を適用するため ---
 cat > /etc/systemd/system/weekly-reboot.timer << 'EOF'
 [Unit]
 Description=Weekly reboot
@@ -386,5 +377,5 @@ ExecStart=/sbin/reboot
 EOF
 systemctl enable --now weekly-reboot.timer
 
-# 12. スタートアップ完了メール送信
+# セットアップ完了通知メール
 mail -s "VPS startup: ${DOMAIN}" "@@@EMAIL@@@" <<< "done"
