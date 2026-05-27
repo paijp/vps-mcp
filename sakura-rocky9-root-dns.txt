@@ -7,7 +7,6 @@ NS1_IP=@@@NS1_IP@@@
 
 exec > >(tee -a /var/log/mcp-startup.log) 2>&1
 
-hostnamectl set-hostname ${DOMAIN}
 
 fallocate -l 1G /swapfile
 chmod og-rwx /swapfile
@@ -15,12 +14,13 @@ mkswap /swapfile
 swapon /swapfile
 echo '/swapfile none swap sw 0 0' | tee -a /etc/fstab
 
+Y="dnf install -y"
 dnf update -y
 dnf config-manager --enable crb
-dnf install -y curl nginx epel-release bind-utils bind
-dnf install -y fail2ban
-dnf install -y certbot python3-certbot-nginx
-dnf install -y postfix s-nail dnf-automatic
+$Y curl nginx epel-release bind-utils bind
+$Y fail2ban
+$Y certbot python3-certbot-nginx
+$Y postfix s-nail dnf-automatic
 postconf -e 'inet_protocols = ipv4'
 systemctl enable --now postfix
 cat > /etc/fail2ban/jail.d/sshd.conf << 'EOF'
@@ -35,7 +35,7 @@ sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
 
 curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-dnf install -y nodejs
+$Y nodejs
 
 MCP_DIR="/opt/mcp-server"
 mkdir -p "$MCP_DIR"
@@ -53,7 +53,7 @@ cat > "$MCP_DIR/package.json" << 'EOF'
 }
 EOF
 
-cat > "$MCP_DIR/index.mjs" << 'MCPEOF'
+cat > "$MCP_DIR/index.mjs" << 'EOF'
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -62,50 +62,52 @@ import { exec, spawn } from "child_process";
 import { readFileSync, writeFileSync, unlinkSync } from "fs";
 import crypto from "crypto";
 
-const BASE        = "/etc/mcp-server";
-const SECRET_FILE = `${BASE}/secret`;
-const TOKEN_FILE  = `${BASE}/token`;
+const MFN = "/etc/mcp-server";
+const SFN  = `${MFN}/secret`;
+const TFN  = `${MFN}/token`;
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-function getToken() { try { return readFileSync(TOKEN_FILE, "utf8").trim(); } catch { return null; } }
-
-app.get("/.well-known/oauth-authorization-server", (req, res) => {
-  const host = req.headers["x-forwarded-host"] || req.headers.host || req.hostname;
-  const proto = req.headers["x-forwarded-proto"] || req.protocol;
+app.get("/.well-known/oauth-authorization-server", (q,r) => {
+  const host = q.headers["x-forwarded-host"] || q.headers.host || q.hostname;
+  const proto = q.headers["x-forwarded-proto"] || q.protocol;
   const base = `${proto}://${host}`;
-  res.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
+  r.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
     token_endpoint: `${base}/token`,
     token_endpoint_auth_methods_supported: ["client_secret_post"],
     response_types_supported: ["code"],
     code_challenge_methods_supported: ["S256"] });
 });
 
-app.get("/authorize", (req, res) => {
-  const { redirect_uri, state } = req.query;
-  if (!redirect_uri) return res.status(400).send();
-  res.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
+app.get("/authorize", (q,r) => {
+  const { redirect_uri, state } = q.query;
+  try { if (new URL(redirect_uri).host !== "claude.ai") return r.status(400).send(); } catch { return r.status(400).send(); }
+  r.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
 });
 
-app.post("/token", (req, res) => {
-  const { client_secret } = req.body;
-  let secret; try { secret = readFileSync(SECRET_FILE, "utf8").trim(); } catch { return res.status(403).send(); }
-  if (client_secret !== secret) return res.status(403).send();
-  try { unlinkSync(SECRET_FILE); } catch {}
-  let token = getToken();
-  if (!token) { token = crypto.randomUUID(); writeFileSync(TOKEN_FILE, token, { mode: 0o600 }); }
-  const cid = req.body.client_id || "unknown";
+const D=t=>crypto.createHash("sha256").update(t).digest("hex");
+
+app.post("/token", (q,r) => {
+  const { client_secret } = q.body;
+  let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return r.status(403).send(); }
+  if (client_secret !== secret) return r.status(403).send();
+  const cid = +q.body.client_id;
+  if (!cid) return r.status(403).send();
+  try { unlinkSync(SFN); } catch {}
+  let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return r.status(403).send(); }
+  writeFileSync(`${MFN}/hash`, D(token), { mode: 0o600 });
+  try { unlinkSync(TFN); } catch {}
   const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
   m.stdin.end("done");
-  setTimeout(() => res.json({ access_token: token, token_type: "Bearer" }), 5000);
+  setTimeout(() => r.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
 
-function auth(req, res, next) {
-  const t = (req.headers.authorization || "").replace("Bearer ", "");
-  const s = getToken();
-  if (!s || t !== s) return res.status(401).send();
+function auth(q,r,next) {
+  const t = (q.headers.authorization || "").replace("Bearer ", "");
+  let h; try { h = readFileSync(`${MFN}/hash`, "utf8").trim(); } catch { return r.status(401).send(); }
+  const hb=Buffer.from(h),tb=Buffer.from(D(t));if(hb.length!==tb.length||!crypto.timingSafeEqual(hb,tb))return r.status(401).send();
   next();
 }
 
@@ -118,7 +120,7 @@ function run(cmd, timeout = 30000) {
   });
 }
 
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/health", (_req, r) => r.json({ status: "ok" }));
 
 function createMcpServer() {
   const server = new McpServer({ name: "sakura-vps", version: "1.0.0" });
@@ -163,33 +165,33 @@ function createMcpServer() {
 
 const ta = new Map();
 
-app.get("/mcp/sse", auth, async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
+app.get("/mcp/sse", auth, async (q,r) => {
+  r.setHeader("Content-Type", "text/event-stream");
+  r.setHeader("Cache-Control", "no-cache");
+  r.setHeader("Connection", "keep-alive");
   const server = createMcpServer();
-  const t = new SSEServerTransport("/mcp/messages", res);
+  const t = new SSEServerTransport("/mcp/messages", r);
   ta.set(t.sessionId, t);
   await server.connect(t);
-  req.on("close", () => {
+  q.on("close", () => {
     ta.delete(t.sessionId);
     t.close();
   });
 });
 
-app.post("/mcp/messages", auth, async (req, res) => {
-  const t = ta.get(req.query.sessionId);
-  if (!t) return res.status(404).json({ error: "Session not found" });
-  await t.handlePostMessage(req, res, req.body);
+app.post("/mcp/messages", auth, async (q,r) => {
+  const t = ta.get(q.query.sessionId);
+  if (!t) return r.status(404).json({ error: "Session not found" });
+  await t.handlePostMessage(q, r, q.body);
 });
 
 app.listen(3000, "127.0.0.1", () => console.log("MCP listening"));
-MCPEOF
+EOF
 
 SERIAL=$(date +%Y%m%d01)
 mkdir -p /etc/named
 
-cat > /var/named/${DOMAIN}.zone << ZONEOF
+cat > /var/named/${DOMAIN}.zone << EOF
 \$TTL 3600
 @ IN SOA ns1.${DOMAIN}. admin.${DOMAIN}. (
     ${SERIAL} 3600 900 604800 300 )
@@ -198,17 +200,17 @@ cat > /var/named/${DOMAIN}.zone << ZONEOF
 @ IN NS ns2.dns.ne.jp.
 @ IN A  ${NS1_IP}
 ns1 IN A ${NS1_IP}
-ZONEOF
+EOF
 chown named:named /var/named/${DOMAIN}.zone
 
-cat > /etc/named/named.conf.local << NAMEDEOF
+cat > /etc/named/named.conf.local << EOF
 zone "${DOMAIN}" {
     type master;
     file "/var/named/${DOMAIN}.zone";
     allow-transfer { 210.188.224.9; 210.224.172.13; };
     also-notify   { 61.211.236.1; 133.167.21.1; };
 };
-NAMEDEOF
+EOF
 
 F=/etc/named.conf
 grep -q 'named.conf.local' $F \
@@ -226,7 +228,6 @@ done
 systemctl enable --now named
 
 sleep 10
-rndc querylog on
 rndc notify "${DOMAIN}"
 
 cd "$MCP_DIR" && npm install --production
@@ -248,48 +249,52 @@ StandardError=append:/var/log/mcp-server.log
 WantedBy=multi-user.target
 EOF
 
-mkdir -p /etc/mcp-server
-echo "@@@CLIENT_SECRET@@@" > /etc/mcp-server/secret
-chmod 600 /etc/mcp-server/secret
+MFN=/etc/mcp-server
+mkdir -p $MFN
+echo "@@@CLIENT_SECRET@@@" > $MFN/secret
+chmod 600 $MFN/secret
+node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('$MFN/token',c.randomUUID(),{mode:0o600});"
 systemctl daemon-reload && systemctl enable --now mcp-server
 
-S="proxy_pass http://127.0.0.1:3000"
-P="proxy_set_header X-Forwarded-"
+L=location
+P="proxy_pass http://127.0.0.1:3000"
+S="proxy_set_header X-Forwarded-"
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
     server_name ${DOMAIN};
-    location /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
-    location ~ ^/mcp/(sse|messages) {
+    ${L} /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
+    ${L} ~ ^/mcp/(sse|messages) {
         access_log off;
-        ${S};
+        ${P};
         proxy_http_version 1.1;
         proxy_buffering off;
         proxy_set_header Connection '';
-        ${P}Proto \$scheme;
-        ${P}Host \$host;
+        ${S}Proto \$scheme;
+        ${S}Host \$host;
         proxy_read_timeout 3600s;
     }
-    location /.well-known/oauth-authorization-server {
-        ${S}/.well-known/oauth-authorization-server;
-        ${P}Proto \$scheme;
-        ${P}Host \$host;
+    ${L} /.well-known/oauth-authorization-server {
+        ${P}/.well-known/oauth-authorization-server;
+        ${S}Proto \$scheme;
+        ${S}Host \$host;
     }
-    location /authorize { ${S}/authorize; }
-    location /token  { allow 160.79.104.0/21; deny all; ${S}/token; }
-    location /health { ${S}/health; }
-    location / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
+    ${L} /authorize { ${P}/authorize; }
+    ${L} /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
+    ${L} /health { ${P}/health; }
+    ${L} / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
 systemctl enable --now nginx
 nginx -t && systemctl reload nginx
 
-mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOKEOF'
+S=/etc/letsencrypt/renewal-hooks/deploy
+mkdir -p ${S}
+cat > ${S}/reload-nginx.sh << 'EOF'
 #!/bin/bash
 systemctl reload nginx
-HOOKEOF
-chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+EOF
+chmod +x ${S}/reload-nginx.sh
 
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
 IP=""
