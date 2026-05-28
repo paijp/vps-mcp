@@ -200,6 +200,7 @@ cat > /var/named/${DOMAIN}.zone << EOF
 @ IN NS ns2.dns.ne.jp.
 @ IN A  ${NS1_IP}
 ns1 IN A ${NS1_IP}
+* IN A  ${NS1_IP}
 EOF
 chown named:named /var/named/${DOMAIN}.zone
 
@@ -259,6 +260,7 @@ systemctl daemon-reload && systemctl enable --now mcp-server
 L=location
 P="proxy_pass http://127.0.0.1:3000"
 S="proxy_set_header X-Forwarded-"
+W=/.well-known/oauth-authorization-server
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
@@ -274,8 +276,8 @@ server {
         ${S}Host \$host;
         proxy_read_timeout 3600s;
     }
-    ${L} /.well-known/oauth-authorization-server {
-        ${P}/.well-known/oauth-authorization-server;
+    ${L} ${W} {
+        ${P}${W};
         ${S}Proto \$scheme;
         ${S}Host \$host;
     }
