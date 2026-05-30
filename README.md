@@ -17,6 +17,10 @@ These scripts provide root-level shell execution (`exec_command`) via MCP. This 
 
 VPS operations via Claude are **at your own risk**. Depending on the instructions and circumstances, irreversible actions such as file deletion, configuration destruction, or charge-incurring operations may occur. Please use with full awareness of these risks.
 
+**Do not place SSH keys on this server to log into other servers.** Root access on this VPS means full access to any private key stored here — and by extension, to every server that key can reach. Don't do it! ...Seriously, don't! ...Well, if you really want to, at least make sure those other servers are equally disposable.
+
+Also note that on Sonnet 4.6, chained cross-server instructions such as "use connector A to SSH into server B, then do X on server B" tend not to work reliably.
+
 ## Quick Start
 
 ### 1. Prepare the VPS
