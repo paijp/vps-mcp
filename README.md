@@ -1,714 +1,714 @@
 # vps-mcp
 
-さくらのVPS(RockyLinux 9)に Claude.ai MCP サーバーを構築するスタートアップスクリプト集です。
+Startup scripts for building a Claude.ai MCP server on Sakura VPS (RockyLinux 9).
 
-> このコードとドキュメントは Claude Sonnet 4.6・Opus 4.7 が書きました。
+> This code and documentation was written by Claude Sonnet 4.6 and Opus 4.7.
 
-## セキュリティポリシー
+## Security Policy
 
-このスクリプトはMCP経由でroot権限のシェル実行(`exec_command`)を提供します。これはバグではなく、Claudeに1台のVPSを完全に委ねるための仕様です。
+These scripts provide root-level shell execution (`exec_command`) via MCP. This is not a bug — it is by design, to give Claude full control over a single VPS.
 
-- token漏洩 = root権限漏洩と等価です
-- 防御は「CLIENT_SECRETの保護」と「token発行通知メールによる検知」の2段のみ
-- 不正な発行通知を受けた場合は、サーバを破棄して再構築してください
-- 多層防御は意図的に省略しています(破られた後の緩和策は意味がないため)
-- `/token` エンドポイントはclaude.aiのIPレンジ(160.79.104.0/21)のみ許可しています
-  (出典: <https://platform.claude.com/docs/en/api/ip-addresses>)
+- Token leakage = root access leakage
+- Defense consists of only two layers: "protecting CLIENT_SECRET" and "detection via token-issuance notification email"
+- If you receive a suspicious issuance notification, discard the server and rebuild from scratch
+- Multi-layer defense is intentionally omitted (mitigation after a breach is meaningless)
+- The `/token` endpoint is restricted to claude.ai's IP range (160.79.104.0/21)
+  (Source: <https://platform.claude.com/docs/en/api/ip-addresses>)
 
-なお、Claude による VPS 操作は、**自己責任**でお願いします。指示の内容や状況によっては、ファイルの削除・設定の破壊・課金が発生する処理など、取り返しのつかない操作がおこなわれるリスクがあります。承知の上でご利用ください。
+VPS operations via Claude are **at your own risk**. Depending on the instructions and circumstances, irreversible actions such as file deletion, configuration destruction, or charge-incurring operations may occur. Please use with full awareness of these risks.
 
-## クイックスタート
+## Quick Start
 
-### 1. VPSの準備
+### 1. Prepare the VPS
 
-さくらのVPSで、メモリ512MBまたはそれ以上のプランを契約します(契約済みのVPSを消去して使う場合は不要です)。新規契約の場合、OSや設定内容はデフォルトで、一度インストールして下さい(インストールしないと、IPアドレスが取得できません)。新規契約の場合、契約後しばらく(執筆時点では72時間)はメールが送れず、後述する検証ができませんので、72時間経過してから作業を進めることをおすすめします。また、同様にドメイン名も用意しておいてください。
+Sign up for a Sakura VPS plan with at least 512MB of memory (skip this if you are repurposing an existing VPS). For new contracts, install with default OS and settings first (you cannot get an IP address without installing). Note that newly contracted accounts cannot send email for a period (72 hours at time of writing), so we recommend waiting 72 hours before proceeding with the verification steps below. Also prepare a domain name in advance.
 
-### 2. ドメインのDNS設定(先に実行)
+### 2. DNS Configuration (do this first)
 
-VPSのIPアドレスでドメインが名前解決できる状態を、**スタートアップスクリプト実行前に**用意してください。DNSが引けないと、スクリプト内で certbot が Let's Encrypt 証明書を取得できず、MCP サーバへの HTTPS アクセスもできません。
+Before running the startup script, ensure your domain resolves to the VPS IP address. If DNS is not working, certbot will fail to obtain a Let's Encrypt certificate and HTTPS access to the MCP server will not be possible.
 
-このVPSをドメインのネームサーバとして使う場合と、既存のネームサーバから A レコードで指す場合の2通りがあります。
+There are two approaches: using this VPS as the nameserver, or pointing an A record from an existing nameserver.
 
-**(A) このVPSをネームサーバにする場合**
+**(A) Using this VPS as the nameserver**
 
-レジストラ側で以下を設定:
+Configure the following at your registrar:
 
-- NSレコードを `ns1.<DOMAIN>` に向ける
-- グルーレコード(`ns1.<DOMAIN>` の A レコード)をVPSのIPで登録
-- さくらのドメインコントロールパネルで「セカンダリネームサーバーとして利用する」を選択し、VPSのIPを登録
+- Point the NS record to `ns1.<DOMAIN>`
+- Register a glue record (A record for `ns1.<DOMAIN>`) with the VPS IP
+- In Sakura's domain control panel, select "Use as secondary nameserver" and register the VPS IP
 
-スタートアップスクリプトのパラメータ `NS1_IP` にはVPSのグローバルIPv4アドレスを指定します(後述)。VPSがゾーンファイルの `@ IN A` および `ns1 IN A`(グルーレコード)、さらに `* IN A`(ワイルドカード)を生成します。複数NICがある場合にプライベートIPが取得されることがあるため、さくらのコントロールパネルで確認したグローバルIPを明示的に指定しています。
+Set the `NS1_IP` startup script parameter to the VPS's global IPv4 address (see below). The VPS will generate zone file entries for `@ IN A`, `ns1 IN A` (glue record), and `* IN A` (wildcard). Since private IPs may be assigned when multiple NICs are present, the global IP confirmed in the Sakura control panel is specified explicitly.
 
-ワイルドカードレコード(`* IN A`)により、`sub.example.com` 等のサブドメインを新たに追加する際にDNSレコードを別途登録する必要がなく、DNS浸透を待たずにnginxの設定だけで即座にサービスを開始できます。
+The wildcard record (`* IN A`) means you can serve new subdomains like `sub.example.com` immediately with just an nginx configuration change — no DNS record registration or propagation wait needed.
 
-**(B) 既存のネームサーバを使う場合**
+**(B) Using an existing nameserver**
 
-ドメインの A レコードに、VPSのグローバルIPv4アドレスを設定してください。この場合もスタートアップスクリプトのパラメータ `NS1_IP` には同じくVPSのIPを指定します(スクリプトはBINDも構築しますが、外部からの問い合わせは既存ネームサーバが処理します)。
+Set an A record for your domain to the VPS's global IPv4 address. Set the `NS1_IP` startup script parameter to the same VPS IP (the script also sets up BIND, but DNS queries will be handled by the existing nameserver).
 
-DNS浸透を確認してから次のステップに進んでください(`dig @8.8.8.8 <DOMAIN>` 等で確認)。
+Verify DNS propagation before proceeding to the next step (e.g., `dig @8.8.8.8 <DOMAIN>`).
 
-なお、IPv6はOS側で無効化されています(`net.ipv6.conf.all.disable_ipv6 = 1`)。さくらVPSの管理画面でグローバルIPv6が割り当て表示されていても、カーネル・nginx・Node.js のいずれもIPv6パケットを処理しません。
+Note: IPv6 is disabled at the OS level (`net.ipv6.conf.all.disable_ipv6 = 1`). Even if the Sakura VPS control panel shows a global IPv6 address, the kernel, nginx, and Node.js will not process IPv6 packets.
 
-### 3. スタートアップスクリプトの登録
+### 3. Register the Startup Script
 
-さくらのVPSコントロールパネルの「マイスクリプト」に `sakura-rocky9-root-dns.txt` を登録してください。以下のパラメータを設定します:
+Register `sakura-rocky9-root-dns.txt` in "My Scripts" in the Sakura VPS control panel. Set the following parameters:
 
-| パラメータ名 | 説明 | 例 |
+| Parameter | Description | Example |
 |---|---|---|
-| `DOMAIN` | ドメイン名 | `example.com` |
-| `NS1_IP` | このVPSのグローバルIPv4アドレス | `153.126.xxx.xxx` |
-| `CLIENT_SECRET` | OAuth2認証用クライアントシークレット(12文字以上のランダム文字列を推奨) | ランダム生成値 |
-| `EMAIL` | Let's Encrypt 通知メール・スタートアップログ送信先・token発行時通知先 | `you@example.com` |
+| `DOMAIN` | Domain name | `example.com` |
+| `NS1_IP` | This VPS's global IPv4 address | `153.126.xxx.xxx` |
+| `CLIENT_SECRET` | OAuth2 client secret (recommended: random string of 12+ characters) | randomly generated value |
+| `EMAIL` | Let's Encrypt notification email / startup log destination / token issuance notification | `you@example.com` |
 
-#### CLIENT_SECRET と CLIENT_ID の値について
+#### About CLIENT_SECRET and CLIENT_ID values
 
-`CLIENT_SECRET` はパラメータとして設定します。`CLIENT_ID` はサーバ側に保存されず、後のステップでClaude.ai コネクタに入力する値です。両方とも**サーバ構築のたびに新規ランダム生成**してください。
+`CLIENT_SECRET` is set as a parameter. `CLIENT_ID` is not stored on the server — it is the value you enter in the Claude.ai connector in a later step. **Generate new random values for every server build.**
 
-- **CLIENT_SECRET**: 12文字以上のランダム文字列を推奨
-- **CLIENT_ID**: **6〜8桁の数字**(`/token` 側で整数として解釈される)
+- **CLIENT_SECRET**: Random string of 12+ characters recommended
+- **CLIENT_ID**: **6–8 digit number** (interpreted as an integer on the `/token` side)
 
-過去に使用した値を再利用しないでください。過去のtoken通知メールやスタートアップスクリプト履歴に値が残るため、将来そのアカウントが侵害された場合に攻撃の足がかりになります。
+Do not reuse values from previous builds. Old values remain in token notification emails and startup script history, which could provide a foothold if that account is compromised in the future.
 
-**CLIENT_ID に推測されやすい値を使わないでください**:
+**Do not use easily guessable values for CLIENT_ID:**
 
-- **今日の日付**(`20260524` 等)
-- 誕生日、電話番号、連続数字、ゾロ目
-- 過去のサーバ構築で使った値
+- **Today's date** (e.g., `20260524`)
+- Birthdays, phone numbers, sequential numbers, repeating digits
+- Values used in previous server builds
 
-これらは攻撃者がステルス侵入時の偽装に使う最有力候補です。理由の詳細は「専門家向け補足」の攻撃シナリオ 2.1 を参照してください。推奨は `node -e "console.log(require('crypto').randomInt(10000000, 100000000))"` 等によるランダム8桁生成です。
+These are prime candidates that attackers try first during stealth intrusion. See attack scenario 2.1 in the Expert Notes section for details. Recommended: generate a random 8-digit number with `node -e "console.log(require('crypto').randomInt(10000000, 100000000))"`.
 
-CLIENT_ID の仕様詳細:
+CLIENT_ID specification details:
 
-- 受理される値: 6〜8桁の整数(例 `123456`, `78451293`)
-- 拒否される値: 空文字列、`0`、英字を含む文字列、`null`、`undefined`、オブジェクト等
-- **先頭のゼロは省略される**(例: `00123456` → `123456` として扱われる)。ゼロで始まる値は避けてください
-- 小数や指数表記(`1e7` 等)も数値として通るが、推奨は素直な6〜8桁の整数
-- メール件名には数値化後の値がそのまま出力される(例: `MCP token issued client_id=78451293`)
+- Accepted values: 6–8 digit integers (e.g., `123456`, `78451293`)
+- Rejected values: empty string, `0`, strings containing letters, `null`, `undefined`, objects, etc.
+- **Leading zeros are stripped** (e.g., `00123456` → treated as `123456`). Avoid values starting with zero
+- Decimals and exponential notation (e.g., `1e7`) are parsed as numbers, but plain 6–8 digit integers are recommended
+- The numeric value is output as-is in the email subject (e.g., `MCP token issued client_id=78451293`)
 
-`client_id` がメール件名内のspam分類トリガー文字列になりうることを避けるため、文字種を数字のみに制限しています。設計上の理由は「専門家向け補足」を参照してください。
+`client_id` is restricted to digits only to avoid it becoming a spam classification trigger in email subjects. See the Expert Notes section for design rationale.
 
-### 4. OS再インストールの実行
+### 4. Reinstall the OS
 
-さくらVPSコントロールパネルで対象サーバを選び、「OS再インストール」を選択。RockyLinux 9 を選び、上記マイスクリプトと先ほど設定したパラメータを指定して、インストールを実行してください。
+In the Sakura VPS control panel, select the target server and choose "Reinstall OS." Select RockyLinux 9, specify the startup script and parameters configured above, and run the installation.
 
-インストールが完了するとスタートアップスクリプトが自動実行されます。数分から10分程度で、登録したメールアドレスにセットアップ完了の通知メールが届きます。
+After installation completes, the startup script runs automatically. Within a few minutes to 10 minutes, you will receive a setup completion notification email at the registered address.
 
-セットアップ完了メールが届かない場合、DNS設定がまだ反映されていないために Let's Encrypt の証明書取得が失敗している可能性があります。**SSH公開鍵を設定済みであれば**、SSHでログインして手動で certbot を実行してください:
+If you do not receive the completion email, DNS propagation may not have finished, causing certbot to fail to obtain a Let's Encrypt certificate. **If you have configured an SSH public key**, log in via SSH and run certbot manually:
 
 ```bash
 certbot --nginx --non-interactive --agree-tos --email <EMAIL> -d <DOMAIN>
 ```
 
-SSHを使えない場合は、DNS浸透を待ってからOS再インストールをやり直すか、しばらく待ってサーバ側の certbot 自動リトライ(`systemctl status certbot-renew.timer` 等)を確認してください。
+If SSH is not available, either wait for DNS propagation and redo the OS reinstallation, or wait and check the server-side certbot auto-retry (`systemctl status certbot-renew.timer`, etc.).
 
-### 5. Claude.ai コネクタの登録
+### 5. Register the Claude.ai Connector
 
-Claude.ai で以下を操作:
+In Claude.ai:
 
 ```
-カスタマイズ → コネクタ → 追加 → カスタムコネクタ
+Customize → Connectors → Add → Custom Connector
 URL:           https://<DOMAIN>/mcp/sse
-client_id:     <ステップ3で決めた6〜8桁の数字>
-client_secret: <ステップ3で設定したCLIENT_SECRET>
+client_id:     <6–8 digit number from step 3>
+client_secret: <CLIENT_SECRET set in step 3>
 ```
 
-**重要**: セキュリティ上の理由により、access_token の発行は初回接続時の1回限りです。Claude.ai コネクタを削除したり、Claude.ai 側で何らかの理由により access_token が失われたりすると、再接続には再セットアップ(OS再インストール)が必要になる場合があります。コネクタ作成後は安易に削除しないでください。
+**Important**: For security reasons, access tokens are issued only once at the initial connection. If you delete the Claude.ai connector or the access token is lost for any reason, re-setup (OS reinstallation) may be required. Do not casually delete the connector after creation.
 
-### 6. 接続時の確認(最重要)
+### 6. Verification at Connection (Most Important)
 
-接続を実行すると、token発行通知メールが届きます。**メールタイトル内の `client_id=***` が、ステップ3で自分が決めた値と完全に一致するか必ず確認してください**。
+When you connect, a token issuance notification email will arrive. **Verify that the `client_id=***` in the email subject exactly matches the value you set in step 3.**
 
-確認すべき項目:
+Items to verify:
 
-- **メールタイトルの `client_id=***` が自分が設定した値と完全に一致するか** ← 最重要
-- メールが自分が接続する前に届いていないか
-- メールが2通以上届いていないか
+- **Does the `client_id=***` in the email subject exactly match the value you configured?** ← Most important
+- Did the email arrive before you connected?
+- Did two or more emails arrive?
 
-いずれかに該当する場合、CLIENT_SECRET突破による不正な初回接続が行われた可能性があります。**ただちにサーバを廃棄し、新しい CLIENT_SECRET / CLIENT_ID で再構築してください**(具体手順は次節)。
+If any of these apply, an unauthorized initial connection may have occurred via CLIENT_SECRET brute-force. **Immediately discard the server and rebuild with new CLIENT_SECRET / CLIENT_ID** (see the next section for specific steps).
 
-なお、攻撃者がroot権限を取得後にメール送信機能を一時的に潰して2通目を発火させない攻撃が成立しうるため(専門家向け補足 2.1 参照)、「2通来たか」「自分の操作前か」は補助的な判定にとどまります。**`client_id` の完全一致こそが本質的な検知シグナル**です。
+Note: An attacker who gains root access could temporarily disable the email sending function to suppress the second email notification (see Expert Notes 2.1). Therefore, "did two emails arrive" and "did it arrive before my action" are supplementary signals only. **Exact match of `client_id` is the essential detection signal.**
 
-### 7. 利用開始
+### 7. Start Using
 
-これで Claude.ai から VPS を操作できるようになりました。例えば「`<コネクタ名>` でwebサーバに準備中のページを作って」のような指示が可能です。
+You can now operate the VPS from Claude.ai. For example, you can give instructions like "Use `<connector name>` to create an under-construction page on the web server."
 
-なお、前述の通り、access_token は初回接続時の1回限り発行されます。**Claude.ai コネクタを削除しないように注意してください**(失うと再セットアップが必要になります)。
+As noted above, access tokens are issued only once at initial connection. **Be careful not to delete the Claude.ai connector** (losing it requires re-setup).
 
-また、Claude による VPS 操作は、**自己責任**でお願いします。指示の内容や状況によっては、ファイルの削除・設定の破壊・課金が発生する処理など、取り返しのつかない操作がおこなわれるリスクがあります。承知の上でご利用ください。
+VPS operations via Claude are **at your own risk**. Depending on the instructions and circumstances, irreversible actions such as file deletion, configuration destruction, or charge-incurring operations may occur. Please use with full awareness of these risks.
 
-## 不正検知時の対応
+## Response to Unauthorized Access Detection
 
-**重要: 「secret/tokenの再設定」だけでは不十分です。** 攻撃者が一度でも `exec_command` を実行できた場合、cron・systemdユニット・SSH鍵・iptables・kernel module 等あらゆる場所に永続バックドアを仕込めるため、**OSレベルで信頼できる状態に戻すことは事実上不可能**です。VPSインスタンス自体を捨ててください。
+**Important: Simply "resetting the secret/token" is insufficient.** If an attacker has executed `exec_command` even once, they can plant persistent backdoors anywhere — cron, systemd units, SSH keys, iptables, kernel modules, etc. — making it virtually impossible to return the OS to a trustworthy state. Discard the VPS instance itself.
 
-具体手順:
+Specific steps:
 
-1. **claude.aiコネクタを削除** — 設定 → Integrations → 該当コネクタを削除
-2. **さくらVPS管理画面でサーバを削除** — 「サーバ削除」を実行(完全削除、停止だけでは不十分)
-3. **DNSレコードを退避または削除** — 同じドメインを再利用する場合、攻撃者がDNSキャッシュを利用して中間者攻撃を仕掛けるリスクを下げるため、TTLが切れるまで待つ
-4. **新しいVPSをセットアップ** — マイスクリプトで**新しい** CLIENT_SECRET / CLIENT_ID / EMAIL を指定。古い値は二度と使わない
-5. **同じドメインを再利用する場合**、新VPSのIPでDNSを再設定。Aレコードに加え、ns1のグルーレコードも更新が必要
-6. **claude.aiコネクタを再登録** — 新しい認証情報で
+1. **Delete the claude.ai connector** — Settings → Integrations → delete the connector
+2. **Delete the server in the Sakura VPS control panel** — Execute "Delete server" (complete deletion; stopping is not enough)
+3. **Remove or retire DNS records** — If reusing the same domain, wait for TTL to expire to reduce the risk of man-in-the-middle attacks using cached DNS
+4. **Set up a new VPS** — In the startup script, specify **new** CLIENT_SECRET / CLIENT_ID / EMAIL. Never reuse old values
+5. **If reusing the same domain**, update DNS to the new VPS IP. In addition to the A record, also update the glue record for ns1
+6. **Re-register the claude.ai connector** — With the new credentials
 
-## ファイル一覧
+## File List
 
-| ファイル | 説明 |
+| File | Description |
 |---|---|
-| `sakura-rocky9-root-dns.txt` | RockyLinux 9 用スタートアップスクリプト(BIND + MCP + Nginx + SSL・コメントなし) |
-| `sakura-rocky9-root-dns-withcomment.txt` | 同上(コメントあり・参照・編集用) |
+| `sakura-rocky9-root-dns.txt` | Startup script for RockyLinux 9 (BIND + MCP + Nginx + SSL, no comments) |
+| `sakura-rocky9-root-dns-withcomment.txt` | Same as above (with comments, for reference and editing) |
 
-さくらのVPSのスタートアップスクリプトには10000文字程度の文字数制限があるため、コメントを省いたり長い文字列を変数化して短縮するなどの対応をしています。可読性を維持するためにまだ実施していませんが、これでも足りなくなった場合は、不要なスペースを削るなどの方法があります。
+Sakura VPS startup scripts have a character limit of approximately 10,000 characters, so comments are omitted and long strings are shortened using variables. If this still becomes insufficient (not yet implemented to maintain readability), further reduction methods include stripping unnecessary spaces.
 
-## セットアップ概要
+## Setup Overview
 
-スクリプトは以下を自動構築します:
+The script automatically builds the following:
 
-1. swapfile (1GB)
-2. Node.js 20 + MCPサーバー (express + @modelcontextprotocol/sdk)
-3. BIND (プライマリDNS) + ゾーンファイル自動生成
-4. Nginx (リバースプロキシ・SSE対応)
-5. certbot (HTTP-01方式・Let's Encrypt SSL 自動取得・更新)
+1. Swapfile (1GB)
+2. Node.js 20 + MCP server (express + @modelcontextprotocol/sdk)
+3. BIND (primary DNS) + automatic zone file generation
+4. Nginx (reverse proxy, SSE-compatible)
+5. certbot (HTTP-01 method, Let's Encrypt SSL auto-acquisition and renewal)
 6. firewalld (ssh/http/https/udp53/tcp53/tcp3000)
-7. dnf-automatic (セキュリティアップデート自動化)
-8. fail2ban (SSH ブルートフォース対策)
-9. 週次reboot (日曜3時・カーネル更新適用)
+7. dnf-automatic (security update automation)
+8. fail2ban (SSH brute-force protection)
+9. Weekly reboot (Sunday 3:00 AM, for applying kernel updates)
 
-## OAuth2認証フロー
+## OAuth2 Authentication Flow
 
-OAuth2 authorization_code フローに**形式上**従っていますが、実質的な認証は `/token` への `client_secret` 提示のみです(設計詳細は専門家向け補足を参照)。
+The server formally follows the OAuth2 `authorization_code` flow, but in practice authentication is only the presentation of `client_secret` to `/token` (see Expert Notes for design details).
 
 ```
 1. GET /.well-known/oauth-authorization-server
-   → claude.aiがエンドポイントを自動検出
+   → claude.ai auto-discovers endpoints
 
 2. GET /authorize
-   → redirect_uri の host が "claude.ai" の場合のみ 302 リダイレクト、
-     それ以外は 400(Open Redirect 対策)
-   → code は固定値 "x" を返す(認可コードとしては機能しない、形式のみ)
+   → 302 redirect only if redirect_uri host is "claude.ai",
+     otherwise 400 (Open Redirect protection)
+   → code returns fixed value "x" (functions only as a formality, not as an authorization code)
 
-3. POST /token { client_secret: "...", client_id: <数字>, code: "x", ... }
-   → secretファイルと照合 → 一致しなければ 403
-   → client_id を +v で数値化、0 または NaN なら 403
-   → secretファイル削除
-   → tokenファイル読み込み → hashファイル(sha256)書き込み → tokenファイル削除
-   → token発行通知メール送信(タイトルにclient_id=<数字>を含む)
-   → 5秒後にtoken返却(メール配送完了の確率を上げるため)
-   → tokenは最初の1回のみ発行(secretファイル削除後は403)
+3. POST /token { client_secret: "...", client_id: <number>, code: "x", ... }
+   → Compared against secret file → 403 if mismatch
+   → client_id cast to number with +v; 403 if 0 or NaN
+   → Secret file deleted
+   → Token file read → hash file (sha256) written → token file deleted
+   → Token issuance notification email sent (subject includes client_id=<number>)
+   → Token returned after 5 seconds (to increase probability of email delivery completion)
+   → Token issued only once (403 after secret file deletion)
 
 4. GET /mcp/sse { Authorization: Bearer <token> }
-   → tokenをsha256化してhashファイルとtimingSafeEqual比較
-   → 一致すればSSE接続成功
+   → Token sha256-hashed and compared to hash file with timingSafeEqual
+   → SSE connection established on match
 ```
 
-## MCPツール
+## MCP Tools
 
-| ツール名 | 機能 |
+| Tool | Function |
 |---|---|
-| `exec_command` | VPS上でシェルコマンドを実行(root権限・30秒タイムアウト) |
-| `nginx_reload` | Nginxをリロード(設定テスト後2秒後に実行・SSEセッション切断あり) |
+| `exec_command` | Execute shell commands on the VPS (root privileges, 30-second timeout) |
+| `nginx_reload` | Reload Nginx (runs 2 seconds after config test; SSE session will disconnect) |
 
-## ゾーン転送について
+## Zone Transfer
 
-さくらのセカンダリDNSからのゾーン転送元IPは固定です:
+Zone transfer source IPs from Sakura's secondary DNS are fixed:
 
 - allow-transfer: `210.188.224.9` / `210.224.172.13`
 - also-notify: `61.211.236.1` (ns1.dns.ne.jp) / `133.167.21.1` (ns2.dns.ne.jp)
 
-参考: [さくらのサポート - ゾーン情報を編集したい](https://help.sakura.ad.jp/domain/2302/)
+Reference: [Sakura Support - How to edit zone information](https://help.sakura.ad.jp/domain/2302/)
 
-## セキュリティ対応済み項目
+## Security Measures Implemented
 
-| 項目 | 対応内容 |
+| Item | Measure |
 |---|---|
-| 認証方式 | OAuth2形式 (authorization_code フロー)、実質は client_secret の1回交換 |
-| Open Redirect | `/authorize` の redirect_uri は host が `claude.ai` のもののみ許可 |
-| token発行 | 初回のみ(secretファイル削除後は403) |
-| token認証 | sha256ハッシュ比較・`crypto.timingSafeEqual` でタイミング攻撃対策 |
-| token発行通知 | メール送信・タイトルにclient_idを含む(不審な接続を即座に検知可能) |
-| token返却 | 5秒遅延(メール配送完了の確率を上げるため・タイミング攻撃対策ではない) |
-| client_id サニタイズ | `+v` で数値化、0/NaN は403(spam分類トリガー文字列の混入防止) |
-| `/token` のIPアドレス制限 | claude.aiのIPレンジ (160.79.104.0/21) のみ許可 |
-| メール送信 | `spawn` の argv 配列形式でシェルインジェクション対策 |
-| MCPログの標準出力 | Nginx access_log off (MCPパス) |
-| IPv6 | OS側で完全無効化 (`disable_ipv6 = 1`) |
-| SSHブルートフォース対策 | fail2ban (5回失敗で10分バン) |
-| オープンリゾルバ | allow-recursion { 127.0.0.1; } |
-| セキュリティ自動更新 | dnf-automatic (security only) |
-| カーネル更新 | 週次reboot (日曜3時) |
+| Authentication | OAuth2 format (authorization_code flow); effectively a one-time client_secret exchange |
+| Open Redirect | `/authorize` only allows redirect_uri with host `claude.ai` |
+| Token issuance | First connection only (403 after secret file deletion) |
+| Token authentication | sha256 hash comparison with `crypto.timingSafeEqual` for timing attack protection |
+| Token issuance notification | Email sent; subject includes client_id (enables immediate detection of suspicious connections) |
+| Token response | 5-second delay (to increase email delivery probability; not a timing attack countermeasure) |
+| client_id sanitization | Cast with `+v`; 403 for 0/NaN (prevents spam classification trigger strings) |
+| `/token` IP address restriction | Only claude.ai IP range (160.79.104.0/21) allowed |
+| Email sending | `spawn` with argv array format to prevent shell injection |
+| MCP log stdout | Nginx `access_log off` (for MCP paths) |
+| IPv6 | Completely disabled at OS level (`disable_ipv6 = 1`) |
+| SSH brute-force protection | fail2ban (10-minute ban after 5 failures) |
+| Open resolver | `allow-recursion { 127.0.0.1; }` |
+| Security auto-update | dnf-automatic (security only) |
+| Kernel update | Weekly reboot (Sunday 3:00 AM) |
 
 ---
 
-# 専門家向け補足
+# Expert Notes
 
-## 1. 設計の本質: OAuth2のインターフェースを使った1回限りAPIキー発行システム
+## 1. Design Essence: A One-Time API Key Issuance System Using the OAuth2 Interface
 
-このサーバは「OAuth2 authorization_code + PKCE フロー」をメタデータで宣言していますが、**実質的にはOAuth2の認可フローを実装していません**。本質は以下です。
+This server declares "OAuth2 authorization_code + PKCE flow" in its metadata, but **does not actually implement the OAuth2 authorization flow**. The essence is:
 
-**実態**:
+**Reality**:
 
-- ユーザーが事前に設定した `CLIENT_SECRET` を `/token` に提示
-- 一致すれば 1回限り `access_token`(UUID)を返却
-- 以後はそのtokenを `Authorization: Bearer` ヘッダで提示するAPIキー方式
+- User presents a pre-configured `CLIENT_SECRET` to `/token`
+- If it matches, a one-time `access_token` (UUID) is returned
+- Subsequently, that token is presented as an API key via the `Authorization: Bearer` header
 
-**OAuth2要素が「形式だけ」になっている箇所**:
+**Where OAuth2 elements are "form only"**:
 
-| 要素 | 形式上の宣言 | 実装 |
+| Element | Declared | Implementation |
 |---|---|---|
-| `/authorize` | 認可エンドポイント | redirect_uri検証以外は素通り、`code=x` 固定 |
-| 認可コード (code) | 一時的な認可証 | 値は無視される、`/token` で検証されない |
-| PKCE (code_challenge) | クライアント認証強化 | メタデータに `S256` と宣言、実装なし |
-| grant_type | フロー識別子 | `/token` で検証されない |
-| token expiry | アクセス制御 | 無期限(永続) |
-| refresh_token | token更新 | 未発行・未対応 |
+| `/authorize` | Authorization endpoint | Pass-through except for redirect_uri validation; `code=x` fixed |
+| Authorization code (code) | Temporary authorization proof | Value is ignored; not validated at `/token` |
+| PKCE (code_challenge) | Client authentication enhancement | `S256` declared in metadata; not implemented |
+| grant_type | Flow identifier | Not validated at `/token` |
+| Token expiry | Access control | Indefinite (permanent) |
+| refresh_token | Token renewal | Not issued; not supported |
 
-**なぜこの形にしているのか**:
+**Why this design**:
 
-claude.aiコネクタはOAuth2インターフェースを期待します。そのため:
+The claude.ai connector expects an OAuth2 interface. Therefore:
 
-- メタデータエンドポイントを提供して「OAuth2サーバーである」と宣言する必要がある
-- claude.aiが `/authorize` → `/token` の順でアクセスしてくる
-- そのフローに表面的に従えば、claude.ai側は満足する
+- A metadata endpoint must be provided to declare "I am an OAuth2 server"
+- claude.ai accesses `/authorize` → `/token` in that order
+- Superficially following that flow satisfies the claude.ai side
 
-その上で、認可フローの内実は「secret提示」だけにして、複雑な状態管理(認可コード保存、PKCE検証、expiry管理、refresh処理)を捨てています。**SSH不要・状態最小・ロジック最小**というこのスクリプトの設計目標と一致しています。
+On top of that, the substance of the authorization flow is reduced to just "secret presentation," discarding complex state management (authorization code storage, PKCE verification, expiry management, refresh handling). This aligns with the design goals of **no SSH required, minimal state, minimal logic**.
 
-正確に表現するなら:
+More precisely:
 
-> **OAuth2 client_credentials grant に最も近い動作を、authorization_code grant のインターフェースで実装したもの。** 認可コードは無意味、token はAPIキー、再発行はファイル操作で行う。
+> **OAuth2 client_credentials grant behavior implemented using the authorization_code grant interface.** The authorization code is meaningless, tokens are API keys, and re-issuance is done via file operations.
 
-claude.aiが将来 `client_credentials` を直接サポートすれば、`/authorize` を削除してより単純化できます。
+If claude.ai directly supports `client_credentials` in the future, `/authorize` can be removed for further simplification.
 
-## 2. 検討した攻撃シナリオ
+## 2. Attack Scenarios Considered
 
-このスクリプトの設計過程で検討された攻撃シナリオと、その評価を記録します。
+Attack scenarios considered during the design of this script, along with their assessments.
 
-### 2.1 ステルス侵入シナリオ(中心的な脅威)
+### 2.1 Stealth Intrusion Scenario (Central Threat)
 
-**攻撃**: secret を破った攻撃者が、正規ユーザーより先に `/token` を消費し、新しいsecret/tokenを書き戻し、さらにメール送信機能を一時的に潰すことで、正規ユーザーには侵入を気づかれずにroot権限を奪取する。
+**Attack**: An attacker who has broken the secret consumes `/token` before the legitimate user, writes back a new secret/token, and temporarily disables the email sending function, gaining root access without the legitimate user noticing.
 
 ```
-1. 攻撃者がCLIENT_SECRETを破る(辞書攻撃・推測・漏洩)
-2. 攻撃者が /token を叩いてaccess_token_Aを取得
-   → この時点でメール1通発火(攻撃者が指定したclient_id)
-3. 攻撃者がexec_command経由でroot権限取得
-4. 攻撃者が secret(同じ値)と新しいtoken_Bを書き戻す
-5. 攻撃者がメール送信を機能的に無効化する:
-   - 例: /opt/mcp-server/index.mjs のspawn行を1行コメントアウトしてサービス再起動(最速)
-   - 例: /bin/mail を exit(0) だけのダミーバイナリで一時的に置換
-   - 例: postfix のリレー設定を破壊
-   - 例: spawn の対象パスを書き換える
-6. 後から正規ユーザーが /token を叩く → token_B が返る
-   → 本来ここでメールが発火するが、ステップ5の細工により送信されない
-7. 攻撃者がメール送信機能を元に戻す(タイマー、ファイル監視、自分宛メールを仕込んで配信完了で検知、等)
-8. 正規ユーザーは「1通だけメールを受け取った」状態になる
-9. その1通の client_id が自分の想定値と一致すれば、ユーザーは正規通知と誤認
-10. 攻撃者はステルスで永続化、ユーザーと同じtoken_Bでサーバ共有
+1. Attacker breaks CLIENT_SECRET (dictionary attack, guessing, or leakage)
+2. Attacker hits /token to obtain access_token_A
+   → At this point, one email fires (with attacker-specified client_id)
+3. Attacker gains root access via exec_command
+4. Attacker writes back the secret (same value) and a new token_B
+5. Attacker functionally disables email sending:
+   - e.g., comment out the spawn line in /opt/mcp-server/index.mjs and restart the service (fastest)
+   - e.g., temporarily replace /bin/mail with a dummy binary that only runs exit(0)
+   - e.g., break postfix relay configuration
+   - e.g., overwrite the spawn target path
+6. Later, the legitimate user hits /token → token_B is returned
+   → Normally an email would fire here, but step 5's tampering prevents it from being sent
+7. Attacker restores email sending (via timer, file watcher, detecting own email delivery completion, etc.)
+8. Legitimate user is in a state of "having received only one email"
+9. If the client_id in that one email matches the user's expected value, the user mistakenly treats it as a legitimate notification
+10. Attacker has stealthily persisted and shares token_B with the user
 ```
 
-**防御の最終防衛線**: メール1通の中の `client_id` 値を、攻撃者が事前に予測できないこと。
+**Last line of defense**: The `client_id` value in the single email must be unpredictable to the attacker in advance.
 
-- 正規ユーザーは自分が設定した client_id を知っている
-- 攻撃者は client_id を知らない(サーバ側にも保存されていない)
-- 攻撃者がランダムな値で叩く → 通知メールに「見覚えのない client_id」が出る → 正規ユーザーが異常検知
-- 攻撃者が「ユーザーが選びそうな値」を当てに行く → ユーザーが**ありきたりな値**を使っていれば的中の可能性
+- The legitimate user knows the client_id they configured
+- The attacker doesn't know the client_id (it's not stored on the server)
+- Attacker hits with a random value → "unfamiliar client_id" appears in notification email → legitimate user detects anomaly
+- Attacker tries to guess "values the user might pick" → if the user uses **common values**, there's a chance of success
 
-**従って、CLIENT_ID には攻撃者から推測困難な値を選ぶことが本質的に重要**。「2通来た」「自分が接続する前に来た」は追加の検知シグナルだが、攻撃者が ステップ5 のような細工で1通に絞ってきた場合、これらのシグナルは機能しない。`client_id` の推測困難性こそが最後の砦になる。
+**Therefore, choosing a value that is difficult to guess for CLIENT_ID is fundamentally important.** "Two emails arrived" and "arrived before I connected" are additional detection signals, but if the attacker restricts it to one email as in step 5, these signals don't function. The unpredictability of `client_id` becomes the last line of defense.
 
-### 2.2 通知ブロック攻撃(深刻な副次脅威)
+### 2.2 Notification Blocking Attack (Serious Secondary Threat)
 
-**攻撃**: 上記2.1の手順中、攻撃者が `client_id` フィールドを細工してメール送信を失敗させる。メールが届かなければステルス侵入が成立する。
+**Attack**: During step 5 of 2.1 above, the attacker manipulates the `client_id` field to cause email sending to fail. If no email arrives, the stealth intrusion succeeds.
 
-検討された具体ベクタ:
+Specific vectors considered:
 
-| ベクタ | 結果 | 評価 |
+| Vector | Result | Assessment |
 |---|---|---|
-| NUL バイト挿入 | Node.js の `spawn` が `ERR_INVALID_ARG_VALUE` で同期 throw | 通知ブロック&token発行も失敗(throw 経路では `setTimeout` 未登録、`r.json` 呼ばれず)→ DoS のみ |
-| 1MB 超の巨大文字列 | `execve` の `ARG_MAX` 超過で `E2BIG` throw | 同上 |
-| `{toString: 1}` 等オブジェクト | template literal の String 変換で throw | 同上 |
-| spam語混入 (`VIAGRA` 等) | spamフィルタによる受信側分類 | **検知シグナル破壊**、ユーザーが見落とすリスク |
-| CRLF (`\r\n`) でヘッダインジェクション | s-nail が NL/CR を自動除去 | 不成立 |
-| 引数注入 (`--option` 風) | `spawn` の argv 配列形式により argv 境界が動かない | 不成立 |
-| 長すぎる件名 | spamフィルタ反応、MUA truncate | **検知シグナル劣化** |
+| NUL byte insertion | Node.js `spawn` throws `ERR_INVALID_ARG_VALUE` synchronously | Blocks notification AND token issuance fails (setTimeout not registered on throw path, r.json not called) → DoS only |
+| String exceeding 1MB | `execve` throws `E2BIG` exceeding `ARG_MAX` | Same as above |
+| Objects like `{toString: 1}` | Throw during String conversion in template literal | Same as above |
+| Spam words (`VIAGRA`, etc.) | Recipient-side classification by spam filter | **Detection signal destroyed**, risk of user missing it |
+| CRLF (`\r\n`) header injection | s-nail automatically removes NL/CR | Not successful |
+| Argument injection (`--option`-style) | argv array format in `spawn` prevents argv boundary movement | Not successful |
+| Excessively long subject | Spam filter reaction, MUA truncation | **Detection signal degraded** |
 
-**防御**: `client_id` を `+v` で数値化、`!cid` で 403。数字のみに制限することで:
+**Defense**: `client_id` cast to number with `+v`, 403 on `!cid`. Restricting to digits only:
 
-- spam語(英単語ベース)が件名に出ない
-- 制御文字・NULバイトが排除される
-- 件名長が自動的に短い(最大8桁)
-- 数字のメール件名はspamフィルタが反応しない
+- Prevents spam words (letter-based) from appearing in subject
+- Eliminates control characters and NUL bytes
+- Subject length is automatically short (8 digits max)
+- Numeric email subjects don't trigger spam filters
 
-throw 経路で「token発行されず通知も飛ばない」は「token発行されて通知が飛ばない」よりは安全なので許容(DoSのみで侵入は成立しない)。
+The "token not issued and notification not sent" on throw path is more acceptable than "token issued but notification not sent" (DoS only; intrusion doesn't succeed).
 
-### 2.3 Open Redirect 経由のフィッシング
+### 2.3 Open Redirect via Phishing
 
-**攻撃**: `/authorize` の `redirect_uri` を任意のサイトに指定して、claude.aiユーザーをフィッシングサイトに誘導。OAuthの慣例として `/authorize` URLは正規サイトと認識されるため、ユーザーが警戒しにくい。
+**Attack**: Specify an arbitrary site in `/authorize`'s `redirect_uri` to redirect claude.ai users to a phishing site. Since `/authorize` URLs are recognized as legitimate sites by OAuth convention, users may be less vigilant.
 
-**防御**: `new URL(redirect_uri).host !== "claude.ai"` で 400。
+**Defense**: `new URL(redirect_uri).host !== "claude.ai"` returns 400.
 
-検証済みのバイパス試行(すべて失敗):
+Verified bypass attempts (all failed):
 
-- `https://claude.ai@evil.com/` (userinfo) → host判定で evil.com 扱い → 400
-- `https://claude.ai.evil.com/` (サブドメイン) → 400
+- `https://claude.ai@evil.com/` (userinfo) → host determination treats it as evil.com → 400
+- `https://claude.ai.evil.com/` (subdomain) → 400
 - `https://evilclaude.ai/` (suffix) → 400
 - `javascript:` / `data:` URL → 400
-- 制御文字 (`\t`, `\r`, `\n`, `\0`) 挿入 → URL APIが除去後にhost判定 → 400
-- IDN同形字 (`claude.ai。evil.com`) → 400
+- Control character (`\t`, `\r`, `\n`, `\0`) insertion → URL API removes them before host determination → 400
+- IDN homoglyphs (`claude.ai。evil.com`) → 400
 
-通る/グレーなケース(いずれも実害なし):
+Passing/gray cases (none with actual harm):
 
-- `https://claude.ai\@evil.com/` → ブラウザがWHATWG準拠でパスとして解釈 → claude.ai 着地
-- `http://claude.ai/cb` (httpダウングレード) → claude.ai に着地
-- `ftp://` `gopher://` 等 → ブラウザが開かない
+- `https://claude.ai\@evil.com/` → browser interprets as path per WHATWG → lands on claude.ai
+- `http://claude.ai/cb` (HTTP downgrade) → lands on claude.ai
+- `ftp://` `gopher://` etc. → browser won't open
 
-### 2.4 CTログ + claude.ai経由の大規模辞書攻撃
+### 2.4 CT Log + claude.ai Large-Scale Dictionary Attack
 
-**攻撃**: 攻撃者が Certificate Transparency ログから `mcp.*` / `*-claude.*` 等のホストを抽出し、claude.aiでコネクタ登録試行を自動化する。`/token` のnginx ACL `allow 160.79.104.0/21` はAnthropicレンジ全体を許可しているので、claude.ai経由の攻撃は素通りする。
+**Attack**: Attacker extracts hosts like `mcp.*` / `*-claude.*` from Certificate Transparency logs and automates connector registration attempts on claude.ai. The nginx ACL `allow 160.79.104.0/21` on `/token` allows the entire Anthropic range, so attacks via claude.ai pass through.
 
-**評価**:
+**Assessment**:
 
-- secret強度が弱い場合は成立する(短い secret、辞書語、サンプル値コピペ)
-- 母数が必要(ニッチな状態では攻撃の経済性が立たない)
-- 普及した場合は、claude.aiが標準SSHコネクタを実装する可能性が高い(歴史的に、ある機能の需要が高まれば他社追随)
-- SSH標準化後は新規ユーザーは標準SSHを使うため、このスクリプトの攻撃面が縮小
-- 既存ユーザーは randomUUID() 由来の122bit token で安全に運用継続可能
+- Succeeds if the secret is weak (short secret, dictionary words, copy-pasted sample values)
+- Requires scale (attack economics don't work for a niche state)
+- If this becomes widespread, claude.ai will likely implement a standard SSH connector (historically, high demand for a feature leads to adoption by others)
+- After SSH standardization, new users will use the standard SSH connector, reducing this script's attack surface
+- Existing users can continue operating safely with 122-bit tokens derived from randomUUID()
 
-**防御**:
+**Defense**:
 
-- CLIENT_SECRET の十分な強度(12文字以上ランダム、ドキュメントのサンプル値をそのまま使わない)
-- CLIENT_ID の十分な強度(6〜8桁数字、誕生日・電話番号・連続数字を避ける)
-- メール通知ループによる検知 → 攻撃成立しても1台ごとに発見・廃棄され、攻撃の経済性が悪化
+- Sufficient CLIENT_SECRET strength (12+ random characters; don't use sample values from documentation as-is)
+- Sufficient CLIENT_ID strength (6–8 digit number; avoid birthdays, phone numbers, sequential numbers)
+- Email notification loop for detection → even if an attack succeeds, it is discovered and discarded per server, making the attack uneconomical
 
-### 2.5 IPv6 経由でのACLすり抜け
+### 2.5 IPv6 ACL Bypass
 
-**攻撃**: `/token` の nginx ACL は IPv4 CIDR `allow 160.79.104.0/21` のみで、IPv6送信元への許可ルールがない。IPv6経路があれば「allowに該当しない=暗黙deny」ではなく「明示的にallow→順次評価→deny all」となるが、nginxの`allow/deny`は IPv4 allow ルールにIPv6送信元はマッチしないため、結果として `deny all` で蹴られる。
+**Attack**: The nginx ACL for `/token` only has `allow 160.79.104.0/21` for IPv4 CIDR. For IPv6 source addresses, the IPv4 allow rule doesn't match, resulting in `deny all`.
 
-**評価**:
+**Assessment**:
 
-- OS側で `disable_ipv6 = 1` のためカーネルがIPv6を処理しない(第一防御)
-- nginx の 443 listen は IPv4 のみ(`listen 443 ssl;`、`listen [::]:443` なし)(第二防御)
-- nginx の `allow 160.79.104.0/21; deny all;` は IPv6 送信元を `deny all` で蹴る(第三防御)
-- DNS AAAA レコードなし(クライアントが IPv6 解決しない)(第四防御)
+- `disable_ipv6 = 1` at the OS level means the kernel doesn't process IPv6 (first defense)
+- nginx's 443 listen is IPv4 only (`listen 443 ssl;`, no `listen [::]:443`) (second defense)
+- nginx's `allow 160.79.104.0/21; deny all;` rejects IPv6 sources with `deny all` (third defense)
+- No DNS AAAA records (clients don't resolve IPv6) (fourth defense)
 
-**現状すり抜けは発生しない**。ただし将来 IPv6 を有効化する運用変更時には注意:
+**No bypass currently occurs.** However, if IPv6 is enabled in future operational changes:
 
-- mcp.conf に `listen [::]:443 ssl;` を追加すると、Anthropic の IPv6 からの正規通信もACLで蹴られる(可用性問題)
-- 攻撃面ではなく可用性側に作用するため、安全側の挙動
+- Adding `listen [::]:443 ssl;` to mcp.conf would cause the ACL to reject legitimate Anthropic IPv6 traffic (availability issue)
+- This affects availability rather than attack surface, so it's a safe-side behavior
 
-### 2.6 mail プロセス kill によるレース攻撃
+### 2.6 Race Attack via mail Process Kill
 
-**攻撃**: 攻撃者が `/token` で access_token を受け取った瞬間に root 権限で `mail` プロセスや postfix を kill し、ローカルキューに残っている通知メールを削除する。
+**Attack**: The moment the attacker receives `access_token` from `/token`, they kill the `mail` process or postfix as root and delete the notification email remaining in the local queue.
 
-**評価**:
+**Assessment**:
 
-- 5秒の `setTimeout` の間に、s-nail はpostfixに引き渡し → postfix が外部リレー(さくらSMTPサーバ)に転送 → さくらSMTPがキューに保持
-- 実測値: ローカル postfix → 外部リレーまで 0.13〜0.64秒(過去ログ)
-- 5秒は外部リレーへの引き渡し完了に十分なマージン
-- 攻撃者が `access_token` を受け取った時点では、メールは既にさくらSMTPサーバ上にあり、攻撃者の手の届かない別ホストにある
-- サーバ側の postfix を破壊しても通知は止められない
+- During the 5-second `setTimeout`, s-nail hands off to postfix → postfix forwards to external relay (Sakura SMTP server) → Sakura SMTP retains in queue
+- Measured values: local postfix → external relay: 0.13–0.64 seconds (past logs)
+- 5 seconds is sufficient margin for handoff to external relay to complete
+- By the time the attacker receives `access_token`, the email is already on the Sakura SMTP server, an unreachable separate host
+- Destroying postfix on the server side cannot stop the notification
 
-**防御は機能している**。
+**Defense is working.**
 
-### 2.7 client_id 偽装による検知逃れ
+### 2.7 Detection Evasion via client_id Spoofing
 
-**攻撃**: 攻撃者が `client_id` フィールドに正規ユーザーの値(に似たもの)を入れて、通知メールを「自分の操作だ」と誤認させる。
+**Attack**: Attacker enters a value similar to the legitimate user's in the `client_id` field, causing the notification email to be mistaken as "my own operation."
 
-**評価**:
+**Assessment**:
 
-- CLIENT_ID は**サーバ側に保存されていない**(`/token` ハンドラがエコーバックするのみ)
-- 攻撃者はサーバを覗いても CLIENT_ID を取得できない
-- 正規ユーザーがランダムな6〜8桁数字を使う限り、攻撃者の推測成功確率は10⁻⁶〜10⁻⁸
-- 「6〜8桁数字」という制約だけは公知なので、攻撃者の探索空間は 10⁸ 通り
+- CLIENT_ID is **not stored on the server** (the `/token` handler only echoes it back)
+- Attacker cannot obtain CLIENT_ID by examining the server
+- As long as the legitimate user uses a random 6–8 digit number, the attacker's probability of guessing correctly is 10⁻⁶ to 10⁻⁸
+- The constraint of "6–8 digit number" is publicly known, so the attacker's search space is 10⁸ possibilities
 
-**防御は CLIENT_ID の選び方に依存**:
+**Defense depends on how CLIENT_ID is chosen**:
 
-- 推奨: `node -e "console.log(require('crypto').randomInt(10000000, 100000000))"` 等で8桁ランダム生成
-- 非推奨:
-  - **今日の日付**(`20260524` 等): 攻撃者がユーザーの想定値を予想する際の最有力候補。ステルス侵入を狙う攻撃者は `client_id` をユーザーが見て自然な値に設定するため、日付は真っ先に試される
-  - 誕生日(8桁、推測可能)
-  - 電話番号下8桁(辞書化されている)
-  - 連続数字(`12345678`)、ゾロ目(`88888888`)
-  - 過去のサーバ構築で使った値(履歴漏洩リスク)
+- Recommended: generate a random 8-digit number with `node -e "console.log(require('crypto').randomInt(10000000, 100000000))"`
+- Not recommended:
+  - **Today's date** (e.g., `20260524`): The top candidate when attackers try to predict the user's intended value. Attackers aiming for stealth intrusion try date values first since they're "natural-looking" values users might pick
+  - Birthdays (8 digits, guessable)
+  - Last 8 digits of phone number (in attack dictionaries)
+  - Sequential numbers (`12345678`), repeating digits (`88888888`)
+  - Values used in previous server builds (history leakage risk)
 
-### 2.8 設定値・hash 漏洩によるtoken 取得可能性
+### 2.8 Token Acquisition via Configuration/Hash Leakage
 
-**攻撃**: CLIENT_SECRET がセットアップスクリプトのテンプレート展開後に `/root/.sakuravps/<host>.sh` に平文で残る。また、`/etc/mcp-server/hash` に token の sha256 ハッシュが保存される。これらが何らかの経路で漏洩した場合、access_token を取得できるか。
+**Attack**: CLIENT_SECRET remains in plaintext at `/root/.sakuravps/<host>.sh` after startup script template expansion. Also, a sha256 hash of the token is stored in `/etc/mcp-server/hash`. If these leak through some channel, can an access_token be obtained?
 
-**評価**: いずれの経路でも **access_token そのものは漏洩しない**。
+**Assessment**: **The access_token itself does not leak through either path.**
 
-- **スクリプト平文の CLIENT_SECRET**: token はセットアップ時に `randomUUID()` で動的生成され、スクリプトには含まれない。CLIENT_SECRET が漏れても、既に `/token` が消費済みであれば再発行できない(secretファイル既に削除済み)。再発行運用をしていない限り、CLIENT_SECRET 単体では access_token を取得できない
-- **`/etc/mcp-server/hash`**: sha256 ハッシュなので、token の逆算は事実上不可能(2^256 通り)。hash があっても認証は通せない(`/mcp/sse` は `sha256(提示されたtoken)` と hash の比較なので、token そのものが必要)
-- **VPS が侵害された場合**: 攻撃者は既に root 権限を持っているため、新しい secret/token を書き戻して任意の値を access_token として発行できる。この経路は侵害後の話なので「漏洩によるtoken 取得」とは別問題
+- **Plaintext CLIENT_SECRET in script**: The token is dynamically generated with `randomUUID()` at setup time and is not in the script. Even if CLIENT_SECRET leaks, re-issuance is impossible if `/token` has already been consumed (secret file already deleted). Unless running a re-issuance operation, CLIENT_SECRET alone cannot obtain an access_token
+- **`/etc/mcp-server/hash`**: It's a sha256 hash, so reversing the token is practically impossible (2^256 possibilities). Even with the hash, authentication cannot pass (`/mcp/sse` compares `sha256(presented token)` with the hash, so the token itself is required)
+- **If the VPS is compromised**: The attacker already has root access, so they can write back a new secret/token and issue any value as access_token. This is a post-compromise scenario, separate from "token acquisition via leakage"
 
-**現状実害なし**。スクリプトの平文 CLIENT_SECRET は、再セットアップ時に新規生成すれば回避できる(古い値を使い回さない運用)。
+**No current actual harm.** The plaintext CLIENT_SECRET in the script can be avoided by generating a new value at re-setup (operational practice of not reusing old values).
 
-### 2.9 メタデータエンドポイントの Host ヘッダインジェクション
+### 2.9 Host Header Injection in Metadata Endpoint
 
-**攻撃**: `/.well-known/oauth-authorization-server` がレスポンスの `issuer` / `authorization_endpoint` / `token_endpoint` を `X-Forwarded-Host` / `X-Forwarded-Proto` から組み立てる。攻撃者が偽装ヘッダを送れば、claude.ai を攻撃者制御のエンドポイントに誘導できる可能性。
+**Attack**: `/.well-known/oauth-authorization-server` constructs `issuer` / `authorization_endpoint` / `token_endpoint` in its response from `X-Forwarded-Host` / `X-Forwarded-Proto`. If an attacker sends spoofed headers, they could potentially redirect claude.ai to an attacker-controlled endpoint.
 
-**評価**:
+**Assessment**:
 
-- nginx 設定で `proxy_set_header X-Forwarded-Host $host;` `proxy_set_header X-Forwarded-Proto $scheme;` が `/.well-known/oauth-authorization-server` ロケーションに**明示的に設定されている**
-- nginx の `proxy_set_header` は同名ヘッダがクライアントから来ても上書きする
-- → クライアント由来の偽装ヘッダはバックエンドに到達しない
+- In the nginx configuration, `proxy_set_header X-Forwarded-Host $host;` and `proxy_set_header X-Forwarded-Proto $scheme;` are **explicitly set** in the `/.well-known/oauth-authorization-server` location
+- nginx's `proxy_set_header` overwrites even if the same header name comes from the client
+- → Spoofed headers from the client do not reach the backend
 
-**防御は機能している**。注意点として、もし nginx 設定変更時にこれらの `proxy_set_header` を削除すると、Express の `req.headers["x-forwarded-host"]` がクライアント由来になりインジェクション成立する。
+**Defense is working.** Note: if these `proxy_set_header` directives are removed during nginx configuration changes, `req.headers["x-forwarded-host"]` in Express would become client-originated, enabling injection.
 
-## 3. CLIENT_ID の性質: サーバも攻撃者も知らない秘密
+## 3. The Nature of CLIENT_ID: A Secret Known Neither to the Server nor the Attacker
 
-CLIENT_ID は OAuth2 の慣例では「公開識別子」ですが、このシステムでは**秘密の合言葉**として再定義されています。
+In OAuth2 convention, CLIENT_ID is a "public identifier," but in this system it is redefined as a **secret passphrase**.
 
-**従来のOAuth2 client_id**:
+**Traditional OAuth2 client_id**:
 
-- 認可サーバに事前登録された識別子
-- 公開情報として扱われる
-- 主にロギング・利用統計目的
+- Identifier pre-registered with the authorization server
+- Treated as public information
+- Primarily for logging and usage statistics
 
-**このシステムでの client_id**:
+**client_id in this system**:
 
-- サーバ側には事前登録されない(`/etc/mcp-server/` に保存されない)
-- ユーザーが Claude.ai コネクタに入力した値が、`/token` リクエストでサーバに届く
-- サーバはその値をメール件名にエコーバックするのみ
-- 正規ユーザー(設定者)と Claude.ai だけが知る情報
+- Not pre-registered on the server (not stored in `/etc/mcp-server/`)
+- The value the user enters in the Claude.ai connector arrives at the server via the `/token` request
+- The server only echoes it back in the email subject
+- Information known only to the legitimate user (configurator) and Claude.ai
 
-**閉ループ自己同定マーカー**:
+**Closed-loop self-identification marker**:
 
 ```
-[ユーザー] → 設定 → [Claude.aiコネクタ]
+[User] → Configure → [Claude.ai Connector]
                        ↓ /token { client_id: <X> }
-                    [MCPサーバ] (Xを保存せずエコーバック)
+                    [MCP Server] (echoes X without storing)
                        ↓ mail Subject: client_id=<X>
-                    [ユーザーのメール] ← 受信
-                       ↓ 目視照合
-                    [正規ユーザー] (自分が設定した X と一致するか確認)
+                    [User's Email] ← Received
+                       ↓ Visual verification
+                    [Legitimate User] (checks if X matches the value they configured)
 ```
 
-**攻撃者が知らない**:
+**Unknown to the attacker**:
 
-- サーバには保存されないので、サーバを覗いても CLIENT_ID は取得できない
-- ネットワーク上では Claude.ai → MCPサーバ の HTTPS 内に閉じている
-- CLIENT_SECRET を破った攻撃者でも、CLIENT_ID は別途推測する必要がある
+- Not stored on the server, so CLIENT_ID cannot be obtained by examining the server
+- On the network, it's enclosed in HTTPS between Claude.ai → MCP server
+- Even an attacker who has broken CLIENT_SECRET must separately guess CLIENT_ID
 
-**この性質から導かれる運用上の指針**:
+**Operational guidelines derived from this property**:
 
-- CLIENT_ID を「メモしておく」必要がある(忘れたら検知できない)
-- CLIENT_ID を「サーバ上のファイルに保存しない」(漏洩経路を作らない)
-- CLIENT_ID を「ブログ・チャットで例示しない」(辞書攻撃の材料を増やさない)
-- CLIENT_ID を「複数のサーバで使い回さない」(1台漏洩で全台波及)
+- CLIENT_ID needs to be "noted down" (cannot detect intrusion if forgotten)
+- CLIENT_ID should "not be saved to a file on the server" (avoids creating a leakage path)
+- CLIENT_ID should "not be shown as an example in blog posts or chats" (avoids adding material for dictionary attacks)
+- CLIENT_ID should "not be reused across multiple servers" (one server's leak affects all)
 
-## 4. 設計の時限性: SSH標準コネクタとの関係
+## 4. Design Temporality: Relationship with SSH Standard Connector
 
-このスクリプトは「**SSH標準コネクタが普及するまでの繋ぎ**」として位置付けています。
+This script is positioned as a **stopgap until SSH standard connectors become widespread**.
 
-**前提となる業界予測**:
+**Underlying industry prediction**:
 
-1. このスクリプトが普及する = 「Claude から VPS をリモート制御したい」ニーズが顕在化
-2. ニーズが顕在化すれば、Anthropic または競合がSSHコネクタを標準実装する経済合理性が生まれる
-3. 競争圧力(MCP, function calling, vision, computer use 等の歴史的パターン)で各社追随
-4. VPS 側には SSH 公開鍵設定の仕組みが既存
-5. 標準化後は新規ユーザーは標準SSHコネクタを使う
+1. This script becoming widespread = latent demand for "remotely controlling VPS from Claude" becomes apparent
+2. If demand becomes apparent, economic incentive for Anthropic or competitors to implement SSH connector as standard arises
+3. Competitive pressure (historical pattern of MCP, function calling, vision, computer use, etc.) leads to adoption by others
+4. VPS side already has existing mechanisms for SSH public key configuration
+5. After standardization, new users will use the standard SSH connector
 
-**「攻撃価値」と「標準化トリガー」が同じイベント(=普及)で発火する**ため、「大規模攻撃が経済的に成立するフェーズ」と「このスクリプトが代替される」がほぼ同期します。攻撃者にとっての「狙い時」が極めて短いか存在しないと評価しています。
+**"Attack value" and "standardization trigger" both fire on the same event (= widespread adoption)**, so "the phase when large-scale attacks are economically viable" and "when this script is replaced" are nearly synchronized. The attacker's "optimal timing" is evaluated as extremely short or nonexistent.
 
-**残存リスク**: 普及〜SSH標準化の間に1〜2年のギャップが生まれた場合、その期間は機会主義的な攻撃の対象になりうる。**この期間こそ、CLIENT_SECRET / CLIENT_ID の強度とメール通知ループの完全性が決定的に重要**。
+**Residual risk**: If a 1–2 year gap between widespread adoption and SSH standardization occurs, that period could be targeted by opportunistic attacks. **During this period, the strength of CLIENT_SECRET / CLIENT_ID and the integrity of the email notification loop are critically important.**
 
-## 5. 既存ユーザーの長期運用安全性
+## 5. Long-Term Operational Safety for Existing Users
 
-SSH 標準コネクタが普及した後も、既存ユーザーは何も変更せずに継続運用できます。
+After SSH standard connectors become widespread, existing users can continue operations without any changes.
 
-**継続安全性の根拠**:
+**Basis for continued safety**:
 
-| 要素 | 状態 |
+| Element | Status |
 |---|---|
-| Bearer token認証 | `randomUUID()` 由来の122bit、総当たり 2^122 ≈ 5×10^36 通りで事実上不可能 |
-| token 比較 | `crypto.timingSafeEqual` で定数時間 |
-| HTTPS 証明書 | certbot による自動更新(90日ごと) |
-| OS パッケージ | dnf-automatic (security) で自動更新 |
-| カーネル | 週次 reboot で更新適用 |
-| `/token` エンドポイント | 既に secret/token 消費済みで攻撃面なし |
-| nginx ACL (Anthropic IP) | `/token` のみに適用、`/mcp/sse` には ACL なし(token認証で保護) |
+| Bearer token authentication | 122-bit derived from randomUUID(); brute force requires 2^122 ≈ 5×10^36 attempts — practically impossible |
+| Token comparison | Constant-time with `crypto.timingSafeEqual` |
+| HTTPS certificate | Auto-renewal by certbot (every 90 days) |
+| OS packages | Auto-updated by dnf-automatic (security) |
+| Kernel | Updates applied via weekly reboot |
+| `/token` endpoint | Already consumed secret/token; no attack surface |
+| nginx ACL (Anthropic IP) | Applied only to `/token`; `/mcp/sse` has no ACL (protected by token auth) |
 
-**注意すべき外部要因**:
+**External factors to watch**:
 
-- Anthropic IPレンジの変更: 現在 `160.79.104.0/21` だが、Anthropicが拡張した場合は `/token` ACL を手動更新が必要。ただし `/token` は既に消費済みなので、再発行運用をする時のみ問題になる
-- MCP プロトコル仕様変更: SDK バージョン更新で互換性が崩れる可能性。`npm install` の固定版でしのげる
-- claude.ai 側の SSE 仕様変更: 接続切断が増える等の問題が発生しうる
+- Anthropic IP range changes: Currently `160.79.104.0/21`, but if Anthropic expands it, the `/token` ACL needs manual update. However, since `/token` is already consumed, this only matters when running a re-issuance operation
+- MCP protocol spec changes: SDK version updates could break compatibility. Can be managed with pinned versions in `npm install`
+- claude.ai SSE spec changes: Issues like increased connection disconnections may occur
 
-**ベース実装が極めてシンプル**(Express + SSE + Bearer auth)なので、breaking change の影響を受けにくい設計です。
+**The base implementation is extremely simple** (Express + SSE + Bearer auth), making it resilient to breaking changes.
 
-## 6. スクリプト改変時の注意点
+## 6. Notes on Script Modification
 
-このスクリプトを改変・フォークする場合の注意。
+Notes for those modifying or forking this script.
 
-### 6.1 メール送信経路を変える場合(Slack通知等)
+### 6.1 Changing the Email Sending Path (Slack notifications, etc.)
 
-`spawn("mail", [...])` を `spawn("curl", [...])` 等に置き換える場合、以下に注意:
+When replacing `spawn("mail", [...])` with `spawn("curl", [...])` etc., note:
 
-- 通知失敗時の挙動: 現在の設計では `mail` の exit code は無視され、5秒 setTimeout の後に token を返す。これは「攻撃者が通知を妨害するシグナルを攻撃者にリークしない」ための意図的な無視
-- ただし副作用として、攻撃者が root を取得した後に `/bin/mail` を `exit(0)` のダミーバイナリで置換するなどして、後続のtoken発行時のメール送信を無効化できる(2.1 ステップ5参照)。元に戻すトリガーは、タイマー・ファイル監視・自分宛メールの配信完了検知など複数の選択肢がある。**サーバ側からはこの種の攻撃は検知できない**ので、ユーザー側の `client_id` 推測困難性が最終防衛線となる
-- 通知遅延: 5秒は外部SMTPまでの引き渡し完了に十分な時間として設定。Slack Webhook 等を使う場合、エンドツーエンドのレイテンシが変わるので調整が必要
-- `client_id` のサニタイズ: 通知先のメッセージング仕様によって sanitize ルールを変える必要(Slackなら `<` `>` `&` を escape、メールならspam語回避)
+- Notification failure behavior: The current design ignores `mail`'s exit code and returns the token after a 5-second setTimeout. This intentional ignorance is to avoid leaking to the attacker a signal that notification was blocked
+- However, as a side effect, after an attacker gains root access, they can disable email sending for subsequent token issuances by replacing `/bin/mail` with a dummy binary (see 2.1 step 5). Restoration triggers include timers, file watchers, detecting own email delivery completion, etc. **This type of attack cannot be detected server-side**, so the unpredictability of the user's `client_id` becomes the last line of defense
+- Notification delay: 5 seconds is set as sufficient time for handoff to external SMTP. If using Slack Webhook etc., adjust for the end-to-end latency
+- `client_id` sanitization: Sanitize rules need to be changed based on the messaging spec of the notification target (escape `<` `>` `&` for Slack; avoid spam words for email)
 
-### 6.2 5秒遅延を変える場合
+### 6.2 Changing the 5-Second Delay
 
-- 短くする(例: 1秒): 外部SMTPまでの引き渡しが完了しないリスク。攻撃者が token 取得直後に postfix を破壊した場合、通知が届かない可能性が高まる
-- 長くする(例: 30秒): claude.ai 側のタイムアウト(通常30〜60秒)に抵触するリスク
+- Shorten (e.g., 1 second): Risk of not completing handoff to external SMTP. If the attacker destroys postfix immediately after receiving the token, there's a higher chance the notification won't arrive
+- Lengthen (e.g., 30 seconds): Risk of conflicting with the claude.ai side timeout (usually 30–60 seconds)
 
-設計値の5秒は「外部SMTP引き渡しに必要な時間(実測 0.13〜0.64秒)+ 安全マージン」として決定されています。
+The design value of 5 seconds was determined as "time needed for external SMTP handoff (measured: 0.13–0.64 seconds) + safety margin."
 
-### 6.3 IP ACL レンジ更新
+### 6.3 IP ACL Range Update
 
-Anthropic が将来 IP レンジを拡張・変更した場合:
+If Anthropic expands or changes the IP range in the future:
 
 ```nginx
 # /etc/nginx/conf.d/mcp.conf
 location /token {
-    allow 160.79.104.0/21;       # 旧
-    allow <新レンジ>;             # 追加
+    allow 160.79.104.0/21;       # existing
+    allow <new range>;            # add
     deny all;
     proxy_pass http://127.0.0.1:3000/token;
 }
 ```
 
-最新 IP レンジは https://platform.claude.com/docs/en/api/ip-addresses で確認可能。
+Check the latest IP range at https://platform.claude.com/docs/en/api/ip-addresses.
 
-### 6.4 client_id サニタイズを変える場合
+### 6.4 Changing client_id Sanitization
 
-`+v` + `!cid` 判定は「数字のみ受理」と「throw 経路で token 発行も止まる」の両方を担保しています。これを緩める場合:
+The `+v` + `!cid` check ensures both "only digits accepted" and "token issuance also stops on throw path." If relaxing this:
 
-- 文字列を受理する → spam フィルタリスク復活
-- `String()` 経由にする → `{toString: 1}` で throw する経路が復活、ただし throw 経路では token 発行されないため要件上は許容
+- Accepting strings → spam filter risk returns
+- Going through `String()` → throw path with `{toString: 1}` returns, but since token is not issued on throw path, it's acceptable from a requirements perspective
 
-`String()` の throw を吸収するなら、`typeof q.body.client_id === "string"` での事前判定が最も安全。
+To absorb `String()` throws, pre-checking with `typeof q.body.client_id === "string"` is safest.
 
-### 6.5 exec_command のタイムアウト変更
+### 6.5 exec_command Timeout Change
 
-現在 30秒。長時間タスク(`apt upgrade` 等)を実行する場合は延長が必要。ただし claude.ai 側のSSE タイムアウト(60秒程度)を超えると応答が返らないため、`nohup ... &` でバックグラウンド化する運用が推奨。
+Currently 30 seconds. Needs to be extended for long-running tasks (`apt upgrade`, etc.). However, since responses won't return if they exceed the claude.ai SSE timeout (approximately 60 seconds), running with `nohup ... &` in the background is recommended.
 
-## 7. トラブルシューティング: ログの所在
+## 7. Troubleshooting: Log Locations
 
-何か異常を感じた時に確認するログ。
+Logs to check when something seems wrong.
 
-| ログ | パス | 内容 |
+| Log | Path | Contents |
 |---|---|---|
-| MCP セットアップログ | `/var/log/mcp-startup.log` | 初回起動時の構築ログ |
-| MCP サーバログ | `/var/log/mcp-server.log` | Node.js の stdout/stderr |
-| MCP systemd ログ | `journalctl -u mcp-server` | サービス再起動・クラッシュ |
-| nginx access | `/var/log/nginx/access.log` | (MCPパスは access_log off なので /token 等のみ) |
-| nginx error | `/var/log/nginx/error.log` | proxy エラー・SSL 問題 |
-| postfix | `journalctl -u postfix` | メール送信成否・キュー状態 |
-| postfix queue | `mailq` | 配送待ちメール |
-| fail2ban | `journalctl -u fail2ban` | SSH ブルートフォース検知・バン記録 |
-| 認証 (sshd 等) | `journalctl _COMM=sshd` | SSH ログイン履歴 |
-| BIND | `journalctl -u named` | DNS クエリ・ゾーン転送 |
-| certbot | `/var/log/letsencrypt/letsencrypt.log` | 証明書取得・更新 |
+| MCP setup log | `/var/log/mcp-startup.log` | Build log from initial startup |
+| MCP server log | `/var/log/mcp-server.log` | Node.js stdout/stderr |
+| MCP systemd log | `journalctl -u mcp-server` | Service restarts and crashes |
+| nginx access | `/var/log/nginx/access.log` | (MCP paths have access_log off, so only /token etc.) |
+| nginx error | `/var/log/nginx/error.log` | Proxy errors and SSL issues |
+| postfix | `journalctl -u postfix` | Email send success/failure and queue state |
+| postfix queue | `mailq` | Emails awaiting delivery |
+| fail2ban | `journalctl -u fail2ban` | SSH brute-force detection and ban records |
+| Authentication (sshd etc.) | `journalctl _COMM=sshd` | SSH login history |
+| BIND | `journalctl -u named` | DNS queries and zone transfers |
+| certbot | `/var/log/letsencrypt/letsencrypt.log` | Certificate acquisition and renewal |
 
-**異常検知時に最初に見るべきもの**:
+**What to check first when anomaly is detected**:
 
-1. `/var/log/nginx/access.log` で `/token` への接続元IPと時刻を確認
-2. `journalctl -u postfix` でメール送信成否を確認
-3. `/var/log/mcp-server.log` で /token ハンドラの実行記録(現状ではログ出力なしのため、変更必要なら追加)
-4. `ls -la /etc/mcp-server/` で secret/token/hash の状態確認
+1. Check `/var/log/nginx/access.log` for source IP and timestamp of connections to `/token`
+2. Check `journalctl -u postfix` for email send success/failure
+3. Check `/var/log/mcp-server.log` for /token handler execution records (currently no log output; add if needed)
+4. Check `ls -la /etc/mcp-server/` for state of secret/token/hash files
 
-## 8. Anthropic IPレンジ更新への対応
+## 8. Responding to Anthropic IP Range Updates
 
-`/token` の nginx ACL は claude.ai の API IP レンジに依存しています。
+The nginx ACL for `/token` depends on the claude.ai API IP range.
 
-**現状**: `160.79.104.0/21`
+**Current**: `160.79.104.0/21`
 
-**確認方法**:
+**How to check**:
 
-1. https://platform.claude.com/docs/en/api/ip-addresses を定期確認(年1回程度)
-2. claude.ai のコネクタが突然 `/token` で 403 を返すようになったら、IP レンジ変更を疑う
+1. Periodically check https://platform.claude.com/docs/en/api/ip-addresses (about once a year)
+2. If the claude.ai connector suddenly starts getting 403 responses from `/token`, suspect an IP range change
 
-**更新手順**:
+**Update procedure**:
 
 ```bash
-# nginx 設定を編集
+# Edit nginx configuration
 vi /etc/nginx/conf.d/mcp.conf
-# location /token { ... } 内の allow 行を更新
+# Update the allow line inside location /token { ... }
 
-# 設定テスト
+# Test configuration
 nginx -t
 
-# リロード(MCP経由なら nginx_reload ツールを使う)
+# Reload (use the nginx_reload tool if accessing via MCP)
 systemctl reload nginx
 ```
 
-**更新が必要になるシナリオ**:
+**Scenarios requiring update**:
 
-- 既に消費済みの `/token` には影響しない(セットアップ時に1回交換するだけ)
-- 新規セットアップ時、または `/token` 再発行運用をする時に必要
-- 既存ユーザーが `/mcp/sse` で運用継続する分には影響しない(別の location で ACL なし)
+- Does not affect the already-consumed `/token` (exchanged only once at setup time)
+- Needed for new setups or when running `/token` re-issuance operations
+- Does not affect existing users continuing to operate via `/mcp/sse` (separate location with no ACL)
 
-## 9. tokenの再発行・リセット運用
+## 9. Token Re-issuance and Reset Operations
 
-> **警告**: 以下の操作に失敗すると、MCP接続ができなくなり、データを初期化してのOS再インストールが必要になる場合があります。内容を十分に理解した上でご利用ください。
+> **Warning**: If the following operations fail, MCP connections may become impossible and OS reinstallation with data initialization may be required. Please use only after fully understanding the contents.
 >
-> 特に `/etc/mcp-server/` の secret/token/hash の状態は `/token` ハンドラの動作と密に結合しており、中途半端な状態(例: secret は再作成したが hash と整合しない token を置いた)になると、以降すべての `/token` リクエストで 403 が返り、`/mcp/sse` も認証失敗で 401 になります。SSH 公開鍵を設定していない場合、リカバリ手段が OS 再インストールのみとなります。
+> In particular, the state of secret/token/hash in `/etc/mcp-server/` is tightly coupled to the `/token` handler behavior. Entering an inconsistent state (e.g., secret recreated but token placed that doesn't match hash) will result in 403 for all subsequent `/token` requests, and `/mcp/sse` will also return 401 for authentication failure. Without an SSH public key configured, the only recovery option is OS reinstallation.
 
-### 9.1 経路A: MCP経由のブートストラップ(SSH不要・設計と整合)
+### 9.1 Path A: MCP-Based Bootstrapping (No SSH Required, Consistent with Design)
 
-既に1台目のClaude.aiアカウントで接続済みのMCP接続から、新しいsecret/tokenを設置して2台目以降を接続する手順。**自分のClaude.aiコネクタが既に動いている前提**です。
+Procedure for installing a new secret/token from an existing MCP connection with one Claude.ai account, to connect a second or subsequent account. **Assumes your Claude.ai connector is already working.**
 
 ```
-1. 既存のMCP接続から exec_command で新しいsecret/tokenを設置:
+1. From the existing MCP connection, install new secret/token via exec_command:
 
-   NEW_SECRET="<2台目用のCLIENT_SECRET>"
+   NEW_SECRET="<CLIENT_SECRET for 2nd account>"
    NEW_TOKEN=$(node -e "console.log(require('crypto').randomUUID())")
    echo "$NEW_SECRET" > /etc/mcp-server/secret
    echo "$NEW_TOKEN" > /etc/mcp-server/token
    chmod 600 /etc/mcp-server/secret /etc/mcp-server/token
 
-2. 2台目のClaude.aiコネクタを登録(client_idは新規の6〜8桁数字):
+2. Register the 2nd Claude.ai connector (new 6–8 digit number for client_id):
 
    URL:           https://<DOMAIN>/mcp/sse
-   client_id:     <2台目用の数字>
-   client_secret: <NEW_SECRETに設定した値>
+   client_id:     <number for 2nd account>
+   client_secret: <value set as NEW_SECRET>
 
-3. 2台目が接続すると、$NEW_TOKEN が access_token として発行され、
-   hash が上書きされる。既存(1台目)のtokenは無効化される。
+3. When the 2nd account connects, $NEW_TOKEN is issued as access_token,
+   and the hash is overwritten. The existing (1st) token is invalidated.
 
-4. 1台目を再接続したい場合、同じ手順を1台目に対して繰り返す。
-   この「片方が接続するたびに他方が無効化される」性質を利用して、
-   実質的には「都度認証」運用になる。
+4. To reconnect the 1st account, repeat the same procedure for the 1st account.
+   Utilizing this "each connection invalidates the other" property effectively
+   creates an "on-demand authentication" operation.
 ```
 
-`exec_command` 自体が root シェルなので、この経路は SSH の代替として機能します。SSH秘密鍵を共有せずに済むメリットがあります。
+Since `exec_command` itself is a root shell, this path functions as an SSH alternative, with the advantage of not needing to share SSH private keys.
 
-### 9.2 経路B: 攻撃シナリオを利用した token 共有
+### 9.2 Path B: Token Sharing via Attack Scenario
 
-攻撃シナリオ 2.1「ステルス侵入」の手順を、正規ユーザーが意図的に踏むことで複数Claude.aiアカウントから**同じtokenを共有**するMCPサーバを構築できます。
+By intentionally following the steps of attack scenario 2.1 "stealth intrusion," legitimate users can build an MCP server where **multiple Claude.ai accounts share the same token**.
 
 ```
-1. 経路Aで、初回接続前に secret と任意の token 値を設置
-2. 1台目のClaude.aiから接続 → 設置した token が access_token として発行される
-3. 1台目接続のMCP内から、再度同じ secret/token を設置(自分自身に対するステルス再発行)
-   echo "<同じCLIENT_SECRET>" > /etc/mcp-server/secret
-   echo "<同じtoken値>" > /etc/mcp-server/token
+1. Via Path A, install secret and any token value before the first connection
+2. 1st Claude.ai account connects → the installed token is issued as access_token
+3. From the 1st account's MCP, reinstall the same secret/token (self re-issuance)
+   echo "<same CLIENT_SECRET>" > /etc/mcp-server/secret
+   echo "<same token value>" > /etc/mcp-server/token
    chmod 600 /etc/mcp-server/secret /etc/mcp-server/token
-4. 2台目のClaude.aiから同じ client_secret で接続
-5. 結果: 両アカウントが同じtokenを共有 (hashも同一・両方が並行接続可能)
+4. 2nd Claude.ai account connects with the same client_secret
+5. Result: both accounts share the same token (same hash; both can connect in parallel)
 ```
 
-この運用は「正規ユーザーが自分自身に対してステルス侵入攻撃を実行する」のと技術的に同じです。複数台運用したい場合の正規手段として位置付けています。
+This operation is technically the same as "legitimate user executing a stealth intrusion attack against themselves." It is positioned as the legitimate method for multi-account operation.
 
-### 9.3 経路C: SSH経由(従来型・SSH鍵設定済みなら使用可)
+### 9.3 Path C: Via SSH (Traditional Method; Available if SSH Key is Configured)
 
-さくらVPS管理画面でSSH公開鍵を設定済みの場合、SSHで入って同じ操作ができます。
+If an SSH public key is configured in the Sakura VPS control panel, you can SSH in and perform the same operations.
 
 ```bash
 ssh root@<DOMAIN>
-NEW_SECRET="<新しいCLIENT_SECRET>"
+NEW_SECRET="<new CLIENT_SECRET>"
 NEW_TOKEN=$(node -e "console.log(require('crypto').randomUUID())")
 echo "$NEW_SECRET" > /etc/mcp-server/secret
 echo "$NEW_TOKEN" > /etc/mcp-server/token
 chmod 600 /etc/mcp-server/secret /etc/mcp-server/token
 ```
 
-### 9.4 tokenのリセット(即時アクセス不可化)
+### 9.4 Token Reset (Immediate Access Revocation)
 
 ```bash
 rm /etc/mcp-server/hash
-# 次のリクエストから 401 を返す
-# 再接続には経路A/B/Cの手順を実行
+# Returns 401 from the next request onward
+# To reconnect, execute the Path A/B/C procedure
 ```
 
-`hash` ファイルが認証の根拠なので、これを消すと既存のBearer tokenはすべて無効化されます。
+Since the `hash` file is the basis for authentication, deleting it invalidates all existing Bearer tokens.
