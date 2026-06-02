@@ -184,7 +184,7 @@ help:
 	mkdir -p /opt/mcp
 	install -m 644 mcp/index.mjs    /opt/mcp/index.mjs
 	install -m 644 mcp/package.json /opt/mcp/package.json
-	cd /opt/mcp && npm ci --omit=dev
+	cd /opt/mcp && npm install --omit=dev
 	install -m 644 systemd/mcp-server.service /etc/systemd/system/
 	systemctl daemon-reload
 
