@@ -41,14 +41,14 @@ mkdir -p "$MCP_DIR"
 
 cat > "$MCP_DIR/package.json" << 'EOF'
 {
-  "name": "vps-mcp-server",
-  "version": "1.0.0",
-  "type": "module",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "express": "^4.18.0",
-    "zod": "^3.22.0"
-  }
+"name": "vps-mcp-server",
+"version": "1.0.0",
+"type": "module",
+"dependencies": {
+"@modelcontextprotocol/sdk": "^1.0.0",
+"express": "^4.18.0",
+"zod": "^3.22.0"
+}
 }
 EOF
 
@@ -70,118 +70,118 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get("/.well-known/oauth-authorization-server", (q,r) => {
-  const host = q.headers["x-forwarded-host"] || q.headers.host || q.hostname;
-  const proto = q.headers["x-forwarded-proto"] || q.protocol;
-  const base = `${proto}://${host}`;
-  r.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
-    token_endpoint: `${base}/token`,
-    token_endpoint_auth_methods_supported: ["client_secret_post"],
-    response_types_supported: ["code"],
-    code_challenge_methods_supported: ["S256"] });
+const host = q.headers["x-forwarded-host"] || q.headers.host || q.hostname;
+const proto = q.headers["x-forwarded-proto"] || q.protocol;
+const base = `${proto}://${host}`;
+r.json({ issuer: base, authorization_endpoint: `${base}/authorize`,
+token_endpoint: `${base}/token`,
+token_endpoint_auth_methods_supported: ["client_secret_post"],
+response_types_supported: ["code"],
+code_challenge_methods_supported: ["S256"] });
 });
 
 app.get("/authorize", (q,r) => {
-  const { redirect_uri, state } = q.query;
-  try { if (new URL(redirect_uri).host !== "claude.ai") return r.status(400).send(); } catch { return r.status(400).send(); }
-  r.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
+const { redirect_uri, state } = q.query;
+try { if (new URL(redirect_uri).host !== "claude.ai") return r.status(400).send(); } catch { return r.status(400).send(); }
+r.redirect(`${redirect_uri}?code=x&state=${state || ""}`);
 });
 
 const D=t=>crypto.createHash("sha256").update(t).digest("hex");
 
 app.post("/token", (q,r) => {
-  const { client_secret } = q.body;
-  let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return r.status(403).send(); }
-  if (client_secret !== secret) return r.status(403).send();
-  const cid = +q.body.client_id;
-  if (!cid) return r.status(403).send();
-  try { unlinkSync(SFN); } catch {}
-  let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return r.status(403).send(); }
-  writeFileSync(`${MFN}/hash`, D(token), { mode: 0o600 });
-  try { unlinkSync(TFN); } catch {}
-  const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
-  m.stdin.end("done");
-  setTimeout(() => r.json({ access_token: token, token_type: "Bearer" }), 5000);
+const { client_secret } = q.body;
+let secret; try { secret = readFileSync(SFN, "utf8").trim(); } catch { return r.status(403).send(); }
+if (client_secret !== secret) return r.status(403).send();
+const cid = +q.body.client_id;
+if (!cid) return r.status(403).send();
+try { unlinkSync(SFN); } catch {}
+let token; try { token = readFileSync(TFN, "utf8").trim(); } catch { return r.status(403).send(); }
+writeFileSync(`${MFN}/hash`, D(token), { mode: 0o600 });
+try { unlinkSync(TFN); } catch {}
+const m=spawn("mail",["-s",`MCP token issued client_id=${cid}`,"@@@EMAIL@@@"]);
+m.stdin.end("done");
+setTimeout(() => r.json({ access_token: token, token_type: "Bearer" }), 5000);
 });
 
 function auth(q,r,next) {
-  const t = (q.headers.authorization || "").replace("Bearer ", "");
-  let h; try { h = readFileSync(`${MFN}/hash`, "utf8").trim(); } catch { return r.status(401).send(); }
-  const hb=Buffer.from(h),tb=Buffer.from(D(t));if(hb.length!==tb.length||!crypto.timingSafeEqual(hb,tb))return r.status(401).send();
-  next();
+const t = (q.headers.authorization || "").replace("Bearer ", "");
+let h; try { h = readFileSync(`${MFN}/hash`, "utf8").trim(); } catch { return r.status(401).send(); }
+const hb=Buffer.from(h),tb=Buffer.from(D(t));if(hb.length!==tb.length||!crypto.timingSafeEqual(hb,tb))return r.status(401).send();
+next();
 }
 
 function run(cmd, timeout = 30000) {
-  return new Promise((resolve, reject) => {
-    exec(cmd, { timeout, maxBuffer: 1024*1024 }, (err, stdout, stderr) => {
-      if (err) { err.stdout = stdout; err.stderr = stderr; reject(err); }
-      else resolve(stdout);
-    });
-  });
+return new Promise((resolve, reject) => {
+exec(cmd, { timeout, maxBuffer: 1024*1024 }, (err, stdout, stderr) => {
+if (err) { err.stdout = stdout; err.stderr = stderr; reject(err); }
+else resolve(stdout);
+});
+});
 }
 
 app.get("/health", (_req, r) => r.json({ status: "ok" }));
 
 function createMcpServer() {
-  const server = new McpServer({ name: "sakura-vps", version: "1.0.0" });
+const server = new McpServer({ name: "sakura-vps", version: "1.0.0" });
 
-  server.tool(
-    "exec_command",
-    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、その場合notifyは10分程度かかる場合がある。",
-    { command: z.string() },
-    async ({ command }) => {
-      try {
-        const out = await run(command);
-        return { content: [{ type: "text", text: out || "(出力なし)" }] };
-      } catch (e) {
-        const isTimeout = e.killed || e.code === "ETIMEDOUT";
-        const msg = [
-          isTimeout ? "タイムアウト（30秒超過）" : e.message,
-          e.stdout ? "stdout: " + e.stdout : "",
-          e.stderr ? "stderr: " + e.stderr : "",
-        ].filter(Boolean).join("\n");
-        return { content: [{ type: "text", text: "エラー: " + msg }], isError: true };
-      }
-    }
-  );
+server.tool(
+"exec_command",
+"VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、その場合notifyは10分程度かかる場合がある。",
+{ command: z.string() },
+async ({ command }) => {
+try {
+const out = await run(command);
+return { content: [{ type: "text", text: out || "(出力なし)" }] };
+} catch (e) {
+const isTimeout = e.killed || e.code === "ETIMEDOUT";
+const msg = [
+isTimeout ? "タイムアウト（30秒超過）" : e.message,
+e.stdout ? "stdout: " + e.stdout : "",
+e.stderr ? "stderr: " + e.stderr : "",
+].filter(Boolean).join("\n");
+return { content: [{ type: "text", text: "エラー: " + msg }], isError: true };
+}
+}
+);
 
-  server.tool(
-    "nginx_reload",
-    "Nginxをリロードする専用ツール。nginx reload/restartは必ずこれを使うこと、2秒後SSEセッションが切断されるので再接続が必要。",
-    {},
-    async () => {
-      try {
-        await run("nginx -t");
-      } catch (e) {
-        return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
-      }
-      setTimeout(() => run("nginx -s reload"), 2000);
-      return { content: [{ type: "text", text: "nginx設定テストOK、2秒後にreload。SSEセッションが切断されるので再接続してください。" }] };
-    }
-  );
+server.tool(
+"nginx_reload",
+"Nginxをリロードする専用ツール。nginx reload/restartは必ずこれを使うこと、2秒後SSEセッションが切断されるので再接続が必要。",
+{},
+async () => {
+try {
+await run("nginx -t");
+} catch (e) {
+return { content: [{ type: "text", text: "設定テスト失敗:\n" + (e.stderr || e.message) }], isError: true };
+}
+setTimeout(() => run("nginx -s reload"), 2000);
+return { content: [{ type: "text", text: "nginx設定テストOK、2秒後にreload。SSEセッションが切断されるので再接続してください。" }] };
+}
+);
 
-  return server;
+return server;
 }
 
 const ta = new Map();
 
 app.get("/mcp/sse", auth, async (q,r) => {
-  r.setHeader("Content-Type", "text/event-stream");
-  r.setHeader("Cache-Control", "no-cache");
-  r.setHeader("Connection", "keep-alive");
-  const server = createMcpServer();
-  const t = new SSEServerTransport("/mcp/messages", r);
-  ta.set(t.sessionId, t);
-  await server.connect(t);
-  q.on("close", () => {
-    ta.delete(t.sessionId);
-    t.close();
-  });
+r.setHeader("Content-Type", "text/event-stream");
+r.setHeader("Cache-Control", "no-cache");
+r.setHeader("Connection", "keep-alive");
+const server = createMcpServer();
+const t = new SSEServerTransport("/mcp/messages", r);
+ta.set(t.sessionId, t);
+await server.connect(t);
+q.on("close", () => {
+ta.delete(t.sessionId);
+t.close();
+});
 });
 
 app.post("/mcp/messages", auth, async (q,r) => {
-  const t = ta.get(q.query.sessionId);
-  if (!t) return r.status(404).json({ error: "Session not found" });
-  await t.handlePostMessage(q, r, q.body);
+const t = ta.get(q.query.sessionId);
+if (!t) return r.status(404).json({ error: "Session not found" });
+await t.handlePostMessage(q, r, q.body);
 });
 
 app.listen(3000, "127.0.0.1", () => console.log("MCP listening"));
@@ -193,7 +193,7 @@ mkdir -p /etc/named
 cat > /var/named/${DOMAIN}.zone << EOF
 \$TTL 3600
 @ IN SOA ns1.${DOMAIN}. admin.${DOMAIN}. (
-    ${SERIAL} 3600 900 604800 300 )
+${SERIAL} 3600 900 604800 300 )
 @ IN NS ns1.${DOMAIN}.
 @ IN NS ns1.dns.ne.jp.
 @ IN NS ns2.dns.ne.jp.
@@ -205,24 +205,24 @@ chown named:named /var/named/${DOMAIN}.zone
 
 cat > /etc/named/named.conf.local << EOF
 zone "${DOMAIN}" {
-    type master;
-    file "/var/named/${DOMAIN}.zone";
-    allow-transfer { 210.188.224.9; 210.224.172.13; };
-    also-notify   { 61.211.236.1; 133.167.21.1; };
+type master;
+file "/var/named/${DOMAIN}.zone";
+allow-transfer { 210.188.224.9; 210.224.172.13; };
+also-notify   { 61.211.236.1; 133.167.21.1; };
 };
 EOF
 
 F=/etc/named.conf
 grep -q 'named.conf.local' $F \
-  || echo 'include "/etc/named/named.conf.local";' >> $F
+|| echo 'include "/etc/named/named.conf.local";' >> $F
 
 sed -i \
-  -e 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' \
-  -e 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' \
-  $F
+-e 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/' \
+-e 's/allow-query\s*{\s*localhost;\s*};/allow-query { any; };/' \
+$F
 for DIRECTIVE in 'listen-on port 53 { any; }' 'allow-query { any; }' 'allow-recursion { 127.0.0.1; }'; do
-  grep -q "${DIRECTIVE%% *}" $F \
-    || sed -i "/^options/a\\\\t${DIRECTIVE};" $F
+grep -q "${DIRECTIVE%% *}" $F \
+|| sed -i "/^options/a\\\\t${DIRECTIVE};" $F
 done
 
 systemctl enable --now named
@@ -262,28 +262,28 @@ S="proxy_set_header X-Forwarded-"
 W=/.well-known/oauth-authorization-server
 cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
-    listen 80;
-    server_name ${DOMAIN};
-    ${L} /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
-    ${L} ~ ^/mcp/(sse|messages) {
-        access_log off;
-        ${P};
-        proxy_http_version 1.1;
-        proxy_buffering off;
-        proxy_set_header Connection '';
-        ${S}Proto \$scheme;
-        ${S}Host \$host;
-        proxy_read_timeout 3600s;
-    }
-    ${L} ${W} {
-        ${P}${W};
-        ${S}Proto \$scheme;
-        ${S}Host \$host;
-    }
-    ${L} /authorize { ${P}/authorize; }
-    ${L} /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
-    ${L} /health { ${P}/health; }
-    ${L} / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
+listen 80;
+server_name ${DOMAIN};
+${L} /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
+${L} ~ ^/mcp/(sse|messages) {
+access_log off;
+${P};
+proxy_http_version 1.1;
+proxy_buffering off;
+proxy_set_header Connection '';
+${S}Proto \$scheme;
+${S}Host \$host;
+proxy_read_timeout 3600s;
+}
+${L} ${W} {
+${P}${W};
+${S}Proto \$scheme;
+${S}Host \$host;
+}
+${L} /authorize { ${P}/authorize; }
+${L} /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
+${L} /health { ${P}/health; }
+${L} / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
 systemctl enable --now nginx
@@ -300,13 +300,13 @@ chmod +x ${S}/reload-nginx.sh
 VPS_IP=$(curl -s ifconfig.me 2>/dev/null || echo "")
 IP=""
 for i in $(seq 1 30); do
-    IP=$(dig +short "$DOMAIN" | tail -1)
-    if [ -n "$IP" ] && [ "$VPS_IP" = "$IP" ]; then
-        certbot --nginx --non-interactive --agree-tos \
-            --email "@@@EMAIL@@@" -d "$DOMAIN" || true
-        break
-    fi
-    sleep 60
+IP=$(dig +short "$DOMAIN" | tail -1)
+if [ -n "$IP" ] && [ "$VPS_IP" = "$IP" ]; then
+certbot --nginx --non-interactive --agree-tos \
+--email "@@@EMAIL@@@" -d "$DOMAIN" || true
+break
+fi
+sleep 60
 done
 
 systemctl enable --now firewalld
