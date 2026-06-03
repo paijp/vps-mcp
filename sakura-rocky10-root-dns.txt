@@ -58,7 +58,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { exec, spawn } from "child_process";
-import { readFileSync, writeFileSync, unlinkSync } from "fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import crypto from "crypto";
 
 const MFN = "/etc/mcp-server";
@@ -158,6 +158,8 @@ setTimeout(() => run("nginx -s reload"), 2000);
 return { content: [{ type: "text", text: "nginx設定テストOK、2秒後にreload。SSEセッションが切断されるので再接続してください。" }] };
 }
 );
+
+server.tool("write_file","ファイルを書き込む",{path:z.string(),content:z.string()},async({path:p,content:c})=>{try{mkdirSync(p.replace(/\/[^\/]*$/,""),{recursive:true});writeFileSync(p,c);return{content:[{type:"text",text:"ok"}]};}catch(e){return{content:[{type:"text",text:"エラー: "+e.message}],isError:true};}});
 
 return server;
 }
