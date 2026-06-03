@@ -159,7 +159,16 @@ return { content: [{ type: "text", text: "nginx設定テストOK、2秒後にrel
 }
 );
 
-server.tool("write_file","ファイルを書き込む",{path:z.string(),content:z.string()},async({path:p,content:c})=>{try{mkdirSync(p.replace(/\/[^\/]*$/,""),{recursive:true});writeFileSync(p,c);return{content:[{type:"text",text:"ok"}]};}catch(e){return{content:[{type:"text",text:"エラー: "+e.message}],isError:true};}});
+server.tool("write_file","ファイルを書き込む",{path:z.string(),content:z.string()},
+async({path:p,content:c})=>{
+try{
+mkdirSync(p.replace(/\/[^\/]*$/,""),{recursive:true});
+writeFileSync(p,c);
+return{content:[{type:"text",text:"ok"}]};
+}catch(e){
+return{content:[{type:"text",text:"エラー: "+e.message}],isError:true};
+}
+});
 
 return server;
 }
@@ -258,6 +267,7 @@ chmod 600 $MFN/secret
 node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('$MFN/token',c.randomUUID(),{mode:0o600});"
 systemctl daemon-reload && systemctl enable --now mcp-server
 
+mkdir -p /var/www/${DOMAIN}
 L=location
 P="proxy_pass http://127.0.0.1:3000"
 S="proxy_set_header X-Forwarded-"
@@ -266,7 +276,7 @@ cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
 listen 80;
 server_name ${DOMAIN};
-${L} /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
+${L} /.well-known/acme-challenge/ { root /var/www/${DOMAIN}; }
 ${L} ~ ^/mcp/(sse|messages) {
 access_log off;
 ${P};
@@ -285,7 +295,7 @@ ${S}Host \$host;
 ${L} /authorize { ${P}/authorize; }
 ${L} /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
 ${L} /health { ${P}/health; }
-${L} / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
+${L} / { root /var/www/${DOMAIN}; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
 systemctl enable --now nginx
