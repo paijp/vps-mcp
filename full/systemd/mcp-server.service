@@ -1,0 +1,19 @@
+[Unit]
+Description=VPS MCP Server
+Documentation=https://github.com/paijp/vps-mcp
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/vps-mcp/host.env
+ExecStart=/usr/bin/node /opt/mcp/index.mjs
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ReadWritePaths=/etc/mcp-server
+
+[Install]
+WantedBy=multi-user.target
