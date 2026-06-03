@@ -110,7 +110,7 @@ const hb=Buffer.from(h),tb=Buffer.from(D(t));if(hb.length!==tb.length||!crypto.t
 next();
 }
 
-function run(cmd, timeout = 30000) {
+function run(cmd, timeout = 60000) {
 return new Promise((resolve, reject) => {
 exec(cmd, { timeout, maxBuffer: 1024*1024 }, (err, stdout, stderr) => {
 if (err) { err.stdout = stdout; err.stderr = stderr; reject(err); }
@@ -126,7 +126,7 @@ const server = new McpServer({ name: "sakura-vps", version: "1.0.0" });
 
 server.tool(
 "exec_command",
-"VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、その場合notifyは10分程度かかる場合がある。",
+"VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、notifyは10分以上かかる。",
 { command: z.string() },
 async ({ command }) => {
 try {
@@ -135,7 +135,7 @@ return { content: [{ type: "text", text: out || "(出力なし)" }] };
 } catch (e) {
 const isTimeout = e.killed || e.code === "ETIMEDOUT";
 const msg = [
-isTimeout ? "タイムアウト（30秒超過）" : e.message,
+isTimeout ? "タイムアウト（60秒超過）" : e.message,
 e.stdout ? "stdout: " + e.stdout : "",
 e.stderr ? "stderr: " + e.stderr : "",
 ].filter(Boolean).join("\n");

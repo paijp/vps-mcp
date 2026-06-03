@@ -134,8 +134,8 @@ function auth(q,r,next) {
   next();
 }
 
-// シェルコマンド実行ヘルパ。30秒でタイムアウト
-function run(cmd, timeout = 30000) {
+// シェルコマンド実行ヘルパ。60秒でタイムアウト
+function run(cmd, timeout = 60000) {
   return new Promise((resolve, reject) => {
     exec(cmd, { timeout, maxBuffer: 1024*1024 }, (err, stdout, stderr) => {
       if (err) { err.stdout = stdout; err.stderr = stderr; reject(err); }
@@ -153,7 +153,7 @@ function createMcpServer() {
   // ツール1: 任意のシェルコマンドをroot権限で実行
   server.tool(
     "exec_command",
-    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、その場合notifyは10分程度かかる場合がある。",
+    "VPS上でシェルコマンドを実行（root権限）。nginx reload/restartはnginx_reloadツールを使うこと。このVPSはプライマリDNSの可能性があり、notifyは10分以上かかる。",
     { command: z.string() },
     async ({ command }) => {
       try {
@@ -162,7 +162,7 @@ function createMcpServer() {
       } catch (e) {
         const isTimeout = e.killed || e.code === "ETIMEDOUT";
         const msg = [
-          isTimeout ? "タイムアウト（30秒超過）" : e.message,
+          isTimeout ? "タイムアウト（60秒超過）" : e.message,
           e.stdout ? "stdout: " + e.stdout : "",
           e.stderr ? "stderr: " + e.stderr : "",
         ].filter(Boolean).join("\n");
