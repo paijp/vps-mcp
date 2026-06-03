@@ -71,7 +71,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
 import { exec, spawn } from "child_process";
-import { readFileSync, writeFileSync, unlinkSync } from "fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import crypto from "crypto";
 
 // MFN: 認証ファイル置き場 / SFN: secret / TFN: token
@@ -187,6 +187,22 @@ function createMcpServer() {
     }
   );
 
+  // ツール3: ファイル書き込み。親ディレクトリも自動生成
+  server.tool(
+    "write_file",
+    "ファイルを書き込む",
+    { path: z.string(), content: z.string() },
+    async ({ path: p, content: c }) => {
+      try {
+        mkdirSync(p.replace(/\/[^\/]*$/, ""), { recursive: true });
+        writeFileSync(p, c);
+        return { content: [{ type: "text", text: "ok" }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: "エラー: " + e.message }], isError: true };
+      }
+    }
+  );
+
   return server;
 }
 
@@ -297,6 +313,7 @@ node -e "const c=require('crypto'),fs=require('fs');fs.writeFileSync('$MFN/token
 systemctl daemon-reload && systemctl enable --now mcp-server
 
 # --- nginxリバースプロキシ。L/P/S/Wは設定内の繰り返しを短縮する変数 ---
+mkdir -p /var/www/${DOMAIN}
 L=location
 P="proxy_pass http://127.0.0.1:3000"
 S="proxy_set_header X-Forwarded-"
@@ -306,7 +323,7 @@ cat > /etc/nginx/conf.d/mcp.conf << EOF
 server {
     listen 80;
     server_name ${DOMAIN};
-    ${L} /.well-known/acme-challenge/ { root /usr/share/nginx/html; }
+    ${L} /.well-known/acme-challenge/ { root /var/www/${DOMAIN}; }
     ${L} ~ ^/mcp/(sse|messages) {
         access_log off;
         ${P};
@@ -325,7 +342,7 @@ server {
     ${L} /authorize { ${P}/authorize; }
     ${L} /token  { allow 160.79.104.0/21; deny all; ${P}/token; }
     ${L} /health { ${P}/health; }
-    ${L} / { root /usr/share/nginx/html; index index.html; try_files \$uri \$uri/ =404; }
+    ${L} / { root /var/www/${DOMAIN}; index index.html; try_files \$uri \$uri/ =404; }
 }
 EOF
 systemctl enable --now nginx
