@@ -34,7 +34,6 @@ sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.co
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
 
-curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
 $Y nodejs
 
 MCP_DIR="/opt/mcp-server"

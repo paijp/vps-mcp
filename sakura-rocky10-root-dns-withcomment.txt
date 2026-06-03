@@ -1,6 +1,6 @@
 #!/bin/bash
 # https://github.com/paijp/vps-mcp
-# さくらのVPS（RockyLinux 9）スタートアップスクリプト
+# さくらのVPS（RockyLinux 10）スタートアップスクリプト
 # このファイルはコメントあり版（参照・編集用）。コメント行を除去するとコメントなし版と一致する。
 set -euo pipefail
 
@@ -44,8 +44,7 @@ sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.co
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
 
-# --- Node.js 20 ---
-curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+# --- Node.js 22 (AppStream標準) ---
 $Y nodejs
 
 MCP_DIR="/opt/mcp-server"
