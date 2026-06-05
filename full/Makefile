@@ -15,7 +15,7 @@ word2_of = $(word 2,$(subst __, ,$(1)))
 word3_of = $(word 3,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help
+.PHONY: help sshsec
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -26,7 +26,10 @@ help:
 	@printf "      Swapfile, BIND wildcard DNS, nginx, Node.js 22, MCP server,\n"
 	@printf "      certbot (waits for DNS propagation), firewall, auto-updates.\n\n"
 	@printf "Variables (auto-read from /etc/vps-mcp/host.env after setupdone):\n"
-	@printf "  DOMAIN  IP  EMAIL\n"
+	@printf "  DOMAIN  IP  EMAIL\n\n"
+	@printf "Optional hardening:\n"
+	@printf "  make sshsec.done\n"
+	@printf "      Disable SSH password auth (explicit) + install fail2ban.\n"
 
 # ── host setup ────────────────────────────────────────────────────────────────
 # Usage: make 203.0.113.1__example.com__admin@example.com.setupdone
@@ -220,3 +223,30 @@ help:
 
 	@touch $@
 	@printf "\nSetup complete: https://$(_DOMAIN)/mcp/sse\n"
+
+# ── SSH hardening + fail2ban ──────────────────────────────────────────────────
+# Usage: make sshsec.done
+# Idempotent: safe to run on an already-hardened host.
+
+sshsec.done:
+	# ── sshd: explicitly disable password authentication ─────────────────────
+	sed -i \
+	    -e 's/^#*\s*PasswordAuthentication.*/PasswordAuthentication no/' \
+	    -e 's/^#*\s*KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' \
+	    -e 's/^#*\s*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' \
+	    /etc/ssh/sshd_config
+	grep -qF 'PasswordAuthentication no' /etc/ssh/sshd_config || \
+	    printf '\nPasswordAuthentication no\n' >> /etc/ssh/sshd_config
+	systemctl reload sshd 2>/dev/null || systemctl reload ssh
+
+	# ── fail2ban ─────────────────────────────────────────────────────────────
+	if command -v apt-get >/dev/null 2>&1; then \
+	    apt-get install -y fail2ban; \
+	elif command -v dnf >/dev/null 2>&1; then \
+	    dnf install -y fail2ban; \
+	fi
+	printf '[sshd]\nenabled = true\n' > /etc/fail2ban/jail.d/sshd.conf
+	systemctl enable --now fail2ban
+
+	@touch $@
+	@printf "SSH hardening done.\n"
