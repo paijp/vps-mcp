@@ -189,12 +189,19 @@ help:
 	systemctl daemon-reload
 
 	# ── MCP credentials ──────────────────────────────────────────────────────
+	# The Bearer token is minted dynamically after a successful GitHub login;
+	# only its sha256 hash is ever written here (by the MCP server at login).
 	mkdir -p /etc/mcp-server
 	chmod 700 /etc/mcp-server
-	openssl rand -hex 8  > /etc/mcp-server/secret
-	openssl rand -hex 32 > /etc/mcp-server/token
-	chmod 600 /etc/mcp-server/secret /etc/mcp-server/token
-	@printf "client_secret: $$(cat /etc/mcp-server/secret)\n"
+	# GitHub OAuth App credentials. A mode-600 template is created on first run;
+	# fill in the real GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET, then restart
+	# mcp-server (systemctl restart mcp-server). Register the OAuth App with
+	# Homepage https://$(_DOMAIN) and callback https://$(_DOMAIN)/mcp/callback.
+	if [ ! -e /etc/vps-mcp/oauth.env ]; then \
+	    printf 'GITHUB_CLIENT_ID=\nGITHUB_CLIENT_SECRET=\n' > /etc/vps-mcp/oauth.env; \
+	    chmod 600 /etc/vps-mcp/oauth.env; \
+	    echo "Created /etc/vps-mcp/oauth.env template — fill in GitHub OAuth App credentials (callback https://$(_DOMAIN)/mcp/callback), then 'systemctl restart mcp-server'."; \
+	fi
 
 	# ── certbot (wait for DNS propagation then run) ───────────────────────────
 	mkdir -p /etc/letsencrypt/renewal-hooks/deploy
@@ -220,3 +227,5 @@ help:
 
 	@touch $@
 	@printf "\nSetup complete: https://$(_DOMAIN)/mcp/sse\n"
+	@printf "Before connecting, set GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET in /etc/vps-mcp/oauth.env\n"
+	@printf "(GitHub OAuth App callback: https://$(_DOMAIN)/mcp/callback), then: systemctl restart mcp-server\n"
