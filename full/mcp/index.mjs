@@ -44,7 +44,11 @@ const TFN = `${MFN}/token`;
 const sha256 = t => crypto.createHash("sha256").update(t).digest("hex");
 
 const app = express();
-app.use(express.json());
+// Express defaults the JSON body limit to 100KB. write_file delivers the file
+// content inside the JSON-RPC request body, so a modest file (the JSON-RPC
+// envelope plus string escaping inflate it further) can exceed that and fail
+// with PayloadTooLargeError. Raise the limit so large files can be written.
+app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: false }));
 
 // ── OAuth discovery ───────────────────────────────────────────────────────────
