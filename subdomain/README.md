@@ -1,0 +1,189 @@
+# vps-subdomain-mcp
+
+Podman-based VPS environment for Claude.ai seminar participants.  
+Each participant gets a Rocky Linux container reachable via a subdomain, with an MCP server that lets Claude.ai manage files and run shell commands.
+
+## Architecture
+
+```
+Internet
+  │
+  ├─ :53   BIND9 (wildcard DNS: *.example.com → server IP)
+  │
+  ├─ :443  vps-proxy (SNI passthrough, PROXY protocol v1)
+  │            └─ container :443  nginx (TLS termination)
+  │                                  └─ 127.0.0.1:3000  Node.js MCP server
+  │
+  └─ :80   vps-proxy-http (HTTP reverse proxy)
+               └─ container :80  nginx
+```
+
+- **BIND9** serves the base domain as a primary authoritative server with a wildcard A record (`*.example.com → server IP`).
+- **vps-proxy** reads the TLS ClientHello SNI, maps `alice.example.com` → container `alice-web`, and TCP-proxies without decryption.  PROXY protocol v1 is injected so nginx sees the real client IP.
+- **vps-proxy-http** reads the HTTP `Host` header and reverse-proxies to the matching container.
+- **list-containers** (setuid-root) queries the Podman socket to build the container→IP routing table used by both proxies.
+- Each container runs systemd, nginx, Postfix (nullclient), and the MCP server.
+
+## Directory layout
+
+```
+proxy/
+  cmd/list-containers/   setuid-root binary — container name/IP discovery
+  cmd/vps-proxy/         TLS SNI passthrough proxy (port 443)
+  cmd/vps-proxy-http/    HTTP reverse proxy (port 80)
+  mapping/               hostname → container-name mapping
+  routes/                live routing table (refreshed every 5 s)
+  sni/                   TLS ClientHello SNI parser
+container/
+  Containerfile          rockylinux:10 + systemd + nginx + Node.js 22
+  nginx/nginx.conf       base nginx config (default server block removed)
+  nginx/vps-mcp.conf     nginx virtual host template (server_name set by init)
+  mcp/index.mjs          MCP server (OAuth 2.1, exec_command, read_file, write_file, nginx_reload)
+  mcp/package.json
+  systemd/mcp-server.service
+  systemd/vps-mcp-init.sh   first-boot init (run via podman exec)
+  systemd/certbot-deploy.sh renewal deploy hook
+host/
+  bind/zone.tmpl                  BIND zone template (wildcard A record)
+  bind/named.conf.local.tmpl      BIND local config template
+  systemd/vps-proxy.service       proxy unit (reads DOMAIN from /etc/vps-mcp/host.env)
+  systemd/vps-proxy-http.service
+  nftables/vps-mcp.nft            INPUT allow-list + OUTPUT restriction
+Makefile
+```
+
+## Prerequisites
+
+- Podman (rootful)
+- Go 1.21+
+- `make`
+
+## Installation
+
+Run once as root on the host, substituting the server's public IP and base domain:
+
+```sh
+make 203.0.113.1__example.com.setupdone
+```
+
+This:
+1. Applies all pending OS updates (`dnf upgrade` / `apt upgrade`) so a fresh VPS starts current
+2. Sets hostname to `example.com` and writes `/etc/vps-mcp/host.env` (`DOMAIN`, `IP`)
+3. Installs BIND9, writes a wildcard zone for `example.com` (with DKIM/SPF/DMARC records), starts `named`
+4. Configures DKIM signing (`opendkim`) and a relay-only `postfix` so containers can send mail
+5. Builds the container image (`vps-mcp:latest`) and the Go proxy binaries (`list-containers`, `vps-proxy`, `vps-proxy-http` in `/usr/local/sbin`)
+6. Installs the proxy socket/service units (`vps-proxy{80,443}`) and nftables rules, then enables + starts them
+7. Enables unattended security updates (`dnf-automatic`) and a weekly reboot (`vps-mcp-reboot.timer`, Sunday ~04:00); `podman-restart.service` brings `--restart=always` containers back up after each reboot
+
+After setup, the domain and IP are read from `/etc/vps-mcp/host.env` automatically — no need to pass `DOMAIN=` for subsequent commands.
+
+> **Long-lived containers**: seminar containers run for weeks, so they receive Rocky Linux security updates automatically via `dnf-automatic-install.timer`. They are not rebooted individually — the host's weekly reboot plus `--restart=always` refreshes them.
+
+> **DNS delegation**: point your registrar's NS records for `example.com` to this server's IP before running setup, or update them afterwards.
+
+## Creating a VPS container
+
+```sh
+make alice__alice@gmail.com.done
+```
+
+This:
+1. Runs `podman run` with `SUBDOMAIN=alice.example.com`, `MAIL_DOMAIN=alice.example.com`, and `NOTIFY_EMAIL=alice@gmail.com`
+2. Waits for the proxy to route the HTTP-01 ACME challenge path to the new container
+3. Runs `podman exec alice-web /usr/local/bin/vps-mcp-init.sh`, which:
+   - Writes `/etc/vps-mcp-env` (including `OAUTH_BASE=https://oauth.example.com`)
+   - Creates `/etc/mcp-server` (holds the issued token hash at login time)
+   - Configures Postfix `myhostname`/`myorigin` to `alice.example.com`
+   - Substitutes `server_name` in the nginx config and reloads nginx
+   - Obtains a Let's Encrypt certificate via `certbot certonly --webroot`
+   - Switches nginx to the live certificate
+   - Runs `systemctl enable --now mcp-server`
+   - Sends a creation notification email to `NOTIFY_EMAIL` from `noreply@alice.example.com`
+4. Creates `alice__alice@gmail.com.done` to record completion
+
+Access is granted by **GitHub login**: a user only obtains a Bearer token if they
+log in with a GitHub account whose verified primary email matches `NOTIFY_EMAIL`.
+
+To create a container for the **parent domain** itself (no subdomain prefix):
+
+```sh
+make default__admin@gmail.com.done
+```
+
+This works identically, but `SUBDOMAIN=example.com` and `MAIL_DOMAIN=default.example.com`.
+
+List running containers:
+
+```sh
+make list
+```
+
+Delete a container (manual):
+
+```sh
+podman stop alice-web && podman rm alice-web
+rm -f alice__alice@gmail.com.done
+```
+
+## GitHub login broker (one-time setup)
+
+Authentication uses real GitHub OAuth. Register one GitHub OAuth App and run a
+single dedicated `oauth` container that brokers logins for every other container.
+
+1. Create a GitHub OAuth App (Settings → Developer settings → OAuth Apps → New):
+   - **Homepage URL**: `https://oauth.example.com`
+   - **Authorization callback URL**: `https://oauth.example.com/mcp/callback`
+2. Fill in `/etc/vps-mcp/oauth.env` (host setup already created it as a mode-600
+   template; edit in the real values):
+   ```
+   GITHUB_CLIENT_ID=...
+   GITHUB_CLIENT_SECRET=...
+   ```
+3. Create the broker container (it is the only one holding the GitHub secret):
+   ```sh
+   make oauth__admin@gmail.com.done
+   ```
+
+Every other container learns only `OAUTH_BASE=https://oauth.example.com`.
+
+## MCP connector setup
+
+After the container is created:
+
+1. The creation notification email arrives at `NOTIFY_EMAIL` (confirms the mail path works).
+2. Add the MCP connector in Claude.ai with the SSE URL:
+   ```
+   https://alice.example.com/mcp/sse
+   ```
+3. Claude.ai opens the authorization page, which redirects to GitHub. Log in with
+   the GitHub account whose verified primary email is `NOTIFY_EMAIL`.
+4. On a successful email match, a token-issuance notification email is sent from
+   `noreply@alice.example.com` to `NOTIFY_EMAIL`.
+5. Claude.ai connects and the tools become available: `exec_command`, `read_file`, `write_file`, and `nginx_reload` (use the latter instead of reloading nginx through `exec_command`, which would interrupt the SSE connection).
+
+The login flow is PKCE-protected (S256): the GitHub authorization code is consumed
+immediately at the broker and never reaches Claude.ai; only a SHA-256 hash of the
+issued Bearer token is retained on disk for subsequent authentication.
+
+## Security notes
+
+- The SNI proxy never decrypts TLS traffic.
+- The PROXY protocol header is generated from `conn.RemoteAddr()` only; client-supplied PROXY headers are rejected by the SNI check (`0x16` byte).
+- `set_real_ip_from` is scoped to the single gateway IP (`10.89.0.1`), not the whole subnet.
+- Access requires a GitHub login whose verified primary email matches `NOTIFY_EMAIL`; the email match is enforced per-container, so the allow-list is never centralized.
+- The PKCE verifier is the only key to retrieving the resolved email from the broker (`/mcp/resolve` is self-authenticating: it looks the email up by `SHA256(verifier)`), so it needs no shared secret or IP restriction.
+- The GitHub authorization code is exchanged immediately at the broker and never handed to Claude.ai; the broker holds the GitHub `client_secret` and is the only container that does.
+- The `/mcp/token` endpoint keeps the Anthropic IP allow-list (`160.79.104.0/21`) as defense in depth; the real gate is PKCE plus the GitHub email match.
+- Only a SHA-256 hash of the issued Bearer token is retained on disk.
+- The MCP server listens on `127.0.0.1:3000` only.
+- `vps-mcp.nft` runs a default-drop INPUT filter that exposes only SSH (22), HTTP/HTTPS (80/443), and DNS (53) publicly; SMTP (25) is reachable from the container subnet only.
+- `vps-mcp.nft` also blocks new outbound connections from non-root host users; established/related traffic is always allowed.
+- Optional SSH hardening is available via `make sshsec.done` (not run by setup): it disables host SSH password authentication (`host/ssh/00-vps-mcp-hardening.conf` — access is key-based, and since containers grant participants root and can reach the host's `:22`, this removes brute-force exposure of host accounts) and installs `fail2ban` with the nftables banaction (`host/fail2ban/jail.d/00-vps-mcp.conf`).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+*This code and documentation were created with [Claude](https://claude.ai/) (Sonnet 4.6 and Opus 4.8).*

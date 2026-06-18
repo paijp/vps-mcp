@@ -1,0 +1,10 @@
+[Unit]
+Description=VPS HTTP TCP Passthrough Proxy socket (port 80)
+Documentation=https://github.com/paijp/vps-subdomain-mcp
+
+[Socket]
+ListenStream=80
+Accept=no
+
+[Install]
+WantedBy=sockets.target
