@@ -1,0 +1,116 @@
+# vps-mcp — full edition (single-host, GitHub login)
+
+A single-host Claude.ai MCP server that gives Claude root-level control of one VPS.
+Unlike the [`startupscript/`](../startupscript/) edition (which authenticates with a
+pre-shared `client_secret`), this edition uses **real GitHub OAuth login**: a Bearer token
+is issued only after a browser GitHub login whose verified primary email matches the
+owner's `NOTIFY_EMAIL`.
+
+Because this is a single host (one VPS, one owner), the authorization-server role seen by
+Claude.ai and the GitHub-login broker role live in the **same process** — there is no
+separate broker container as in the multi-tenant [`subdomain/`](../subdomain/README.md)
+edition. The GitHub OAuth App's single callback is this host's `/mcp/callback`.
+
+## Security
+
+This server provides **root-level shell execution (`exec_command`) via MCP** by design.
+
+- **Token leakage = root access leakage.**
+- **Do not place SSH keys** on this server to reach other hosts.
+- VPS operations via Claude are **at your own risk** (irreversible actions are possible).
+- If you receive an unexpected token-issuance email, **discard the VPS and rebuild**.
+
+The Bearer token is minted dynamically at login and only its sha256 hash is stored
+(`/etc/mcp-server/hash`). Email notification fires **only** at token issuance.
+
+## Prerequisites
+
+- A VPS (RockyLinux / Debian-family) with root, ≥512MB RAM.
+- A domain whose A record (and `ns1` glue, if this host is the nameserver) points at the VPS.
+- A **GitHub OAuth App** (created once — see below).
+
+## Setup
+
+Run as root from this directory.
+
+### 1. Host setup
+
+```
+make 203.0.113.1__example.com__admin@example.com.setupdone
+```
+
+Stem format is `IP__DOMAIN__EMAIL`. This builds: swapfile, BIND wildcard DNS, nginx,
+Node.js 22, the MCP server, certbot (waits for DNS propagation), firewall, OpenDKIM/Postfix,
+and auto-updates. It also writes an `/etc/vps-mcp/oauth.env` template (mode 600). The MCP
+server starts, but GitHub login will not work until credentials are filled in.
+
+No email is sent at this stage.
+
+### 2. Create a GitHub OAuth App
+
+On GitHub → Settings → Developer settings → **OAuth Apps** → New OAuth App:
+
+- **Homepage URL:** `https://example.com`
+- **Authorization callback URL:** `https://example.com/mcp/callback`
+
+Copy the **Client ID** and generate a **Client Secret**.
+
+### 3. Apply credentials
+
+Edit `/etc/vps-mcp/oauth.env`:
+
+```
+GITHUB_CLIENT_ID=<client id>
+GITHUB_CLIENT_SECRET=<client secret>
+```
+
+Then:
+
+```
+make oauth.done
+```
+
+This validates the values are present, restarts `mcp-server`, and records completion.
+Re-running after any future edit of `oauth.env` re-applies automatically (the target
+depends on the file's timestamp).
+
+### 4. Register the Claude.ai connector
+
+```
+Customize → Connectors → Add → Custom Connector
+URL: https://example.com/mcp/sse
+```
+
+On connect, the browser is sent through GitHub login. A Bearer is issued **only** if the
+verified primary email matches `NOTIFY_EMAIL` (set to the owner's email during setup). A
+single notification email is sent at that moment.
+
+## MCP tools
+
+| Tool | Function |
+|---|---|
+| `exec_command` | Run a shell command on the VPS (root), returns stdout/stderr |
+| `read_file` | Read a file from the VPS filesystem |
+| `write_file` | Write content to a file (large files supported; body limit raised to 25MB) |
+| `nginx_reload` | Validate and reload nginx (deferred so the SSE result is flushed first) |
+
+## Endpoints
+
+| Path | Purpose |
+|---|---|
+| `/.well-known/oauth-authorization-server` | OAuth discovery (PKCE S256, public client) |
+| `/mcp/register` | Dynamic client registration (RFC 7591) |
+| `/mcp/authorize` | Validates redirect_uri is claude.ai + PKCE S256, redirects to GitHub |
+| `/mcp/callback` | Exchanges the GitHub code, binds verified email to the PKCE challenge |
+| `/mcp/token` | Issues a Bearer iff resolved email matches `NOTIFY_EMAIL` |
+| `/mcp/sse`, `/mcp/messages` | MCP SSE transport (Bearer auth) |
+
+## Environment
+
+From `/etc/vps-mcp/host.env` and `/etc/vps-mcp/oauth.env`:
+
+| Var | Meaning |
+|---|---|
+| `SUBDOMAIN` | full hostname, e.g. `example.com` |
+| `NOTIFY_EMAIL` | the owner's email; only this GitHub account is allowed |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth App credentials |

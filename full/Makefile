@@ -24,7 +24,13 @@ help:
 	@printf "Setup (run once as root):\n"
 	@printf "  make 203.0.113.1__example.com__admin@example.com.setupdone\n"
 	@printf "      Swapfile, BIND wildcard DNS, nginx, Node.js 22, MCP server,\n"
-	@printf "      certbot (waits for DNS propagation), firewall, auto-updates.\n\n"
+	@printf "      certbot (waits for DNS propagation), firewall, auto-updates.\n"
+	@printf "      Also writes an /etc/vps-mcp/oauth.env template.\n\n"
+	@printf "  Then fill GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET in\n"
+	@printf "  /etc/vps-mcp/oauth.env (GitHub OAuth App callback\n"
+	@printf "  https://<DOMAIN>/mcp/callback) and run:\n"
+	@printf "  make oauth.done\n"
+	@printf "      Applies the credentials (restarts mcp-server).\n\n"
 	@printf "Variables (auto-read from /etc/vps-mcp/host.env after setupdone):\n"
 	@printf "  DOMAIN  IP  EMAIL\n"
 
@@ -200,7 +206,7 @@ help:
 	if [ ! -e /etc/vps-mcp/oauth.env ]; then \
 	    printf 'GITHUB_CLIENT_ID=\nGITHUB_CLIENT_SECRET=\n' > /etc/vps-mcp/oauth.env; \
 	    chmod 600 /etc/vps-mcp/oauth.env; \
-	    echo "Created /etc/vps-mcp/oauth.env template — fill in GitHub OAuth App credentials (callback https://$(_DOMAIN)/mcp/callback), then 'systemctl restart mcp-server'."; \
+	    echo "Created /etc/vps-mcp/oauth.env template — fill in GitHub OAuth App credentials (callback https://$(_DOMAIN)/mcp/callback), then 'make oauth.done'."; \
 	fi
 
 	# ── certbot (wait for DNS propagation then run) ───────────────────────────
@@ -218,14 +224,35 @@ help:
 	done
 
 	# ── start MCP server ─────────────────────────────────────────────────────
+	# Starts now; GitHub login (and the only notification email) happens later,
+	# once oauth.env is filled in and `make oauth.done` is run. No email is sent
+	# at setup time — the sole notification fires at token issuance.
 	systemctl enable --now mcp-server
-
-	# ── creation notification ────────────────────────────────────────────────
-	printf 'From: noreply@%s\r\nTo: %s\r\nSubject: created: %s\r\n\r\nVPS MCP server ready.\r\nMCP SSE endpoint: https://%s/mcp/sse\r\n' \
-	    "$(_DOMAIN)" "$(_EMAIL)" "$(_DOMAIN)" "$(_DOMAIN)" \
-	    | /usr/sbin/sendmail -f "noreply@$(_DOMAIN)" "$(_EMAIL)" || true
 
 	@touch $@
 	@printf "\nSetup complete: https://$(_DOMAIN)/mcp/sse\n"
-	@printf "Before connecting, set GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET in /etc/vps-mcp/oauth.env\n"
-	@printf "(GitHub OAuth App callback: https://$(_DOMAIN)/mcp/callback), then: systemctl restart mcp-server\n"
+	@printf "Next: set GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET in /etc/vps-mcp/oauth.env\n"
+	@printf "(GitHub OAuth App callback: https://$(_DOMAIN)/mcp/callback), then: make oauth.done\n"
+
+# ── apply GitHub OAuth credentials ────────────────────────────────────────────
+# Second stage: after filling /etc/vps-mcp/oauth.env, run `make oauth.done` to
+# restart the MCP server so the new credentials take effect. A real file target
+# (not .PHONY): because it depends on oauth.env, editing that file makes it newer
+# than oauth.done, so a later `make oauth.done` re-applies automatically.
+
+# Ensure the template exists even if `make oauth.done` is run before setup
+# (e.g. on a host configured by other means): create a mode-600 stub so the
+# guard below can prompt for the missing values instead of a cryptic
+# "No rule to make target" error.
+/etc/vps-mcp/oauth.env:
+	@mkdir -p /etc/vps-mcp
+	@printf 'GITHUB_CLIENT_ID=\nGITHUB_CLIENT_SECRET=\n' > $@
+	@chmod 600 $@
+	@echo "Created $@ template — fill in GitHub OAuth App credentials, then: make oauth.done"
+
+oauth.done: /etc/vps-mcp/oauth.env
+	@grep -q '^GITHUB_CLIENT_ID=..*'     $< || { echo "Set GITHUB_CLIENT_ID in $<";     exit 1; }
+	@grep -q '^GITHUB_CLIENT_SECRET=..*' $< || { echo "Set GITHUB_CLIENT_SECRET in $<"; exit 1; }
+	systemctl restart mcp-server
+	@touch $@
+	@printf "OAuth applied. Connect via https://$(DOMAIN)/mcp/sse and log in with GitHub.\n"

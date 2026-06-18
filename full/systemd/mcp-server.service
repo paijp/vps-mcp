@@ -6,7 +6,9 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/vps-mcp/host.env
-EnvironmentFile=/etc/vps-mcp/oauth.env
+# Optional (leading "-"): the template is created during setup and filled in
+# later, so the service must start even before credentials are present.
+EnvironmentFile=-/etc/vps-mcp/oauth.env
 ExecStart=/usr/bin/node /opt/mcp/index.mjs
 Restart=on-failure
 RestartSec=5
