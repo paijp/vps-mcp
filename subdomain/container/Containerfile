@@ -1,0 +1,91 @@
+# https://github.com/paijp/vps-subdomain-mcp
+
+FROM rockylinux:10
+
+# ── Base system ───────────────────────────────────────────────────────────────
+# certbot comes from EPEL; nodejs 22 from AppStream — no third-party repos.
+# Automatic security updates use dnf-automatic-install.timer, covered by
+# Red Hat's security team through the AppStream / BaseOS / EPEL channels.
+RUN dnf install -y epel-release \
+    && dnf install -y \
+        systemd \
+        nginx \
+        certbot \
+        openssl \
+        ca-certificates \
+        postfix \
+        nodejs \
+        npm \
+        curl \
+        dnf-automatic \
+    && dnf clean all
+
+# ── Disable unwanted units ────────────────────────────────────────────────────
+# dnf-automatic-install.timer is intentionally NOT masked: it applies
+# security updates so the long-lived container stays patched.
+RUN systemctl mask \
+    getty@tty1.service \
+    console-getty.service \
+    systemd-logind.service \
+    NetworkManager.service \
+    firewalld.service
+
+# ── Automatic security updates ────────────────────────────────────────────────
+# dnf-automatic-install always applies updates (no config needed).
+# The container itself never reboots — the host's weekly vps-mcp-reboot.timer
+# plus --restart=always refreshes running containers.
+RUN systemctl enable dnf-automatic-install.timer
+
+# ── Self-signed certificate (replaced by certbot on first boot) ───────────────
+RUN mkdir -p /etc/nginx/ssl \
+    && openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+       -keyout /etc/nginx/ssl/privkey.pem \
+       -out    /etc/nginx/ssl/fullchain.pem \
+       -subj   "/CN=localhost"
+
+# ── nginx configuration ───────────────────────────────────────────────────────
+# Replace the Rocky default nginx.conf (which has a server{} block that
+# conflicts with ours) with a clean version that only includes conf.d/.
+COPY nginx/nginx.conf     /etc/nginx/nginx.conf
+COPY nginx/vps-mcp.conf   /etc/nginx/conf.d/vps-mcp.conf
+
+# ── Postfix nullclient ────────────────────────────────────────────────────────
+# myhostname is set by vps-mcp-init.sh at runtime.
+RUN postconf -e \
+    "relayhost = [10.89.0.1]:25" \
+    "inet_interfaces = loopback-only" \
+    "mydestination =" \
+    "local_transport = error: local delivery disabled"
+
+# ── MCP server ────────────────────────────────────────────────────────────────
+RUN mkdir -p /opt/mcp
+COPY mcp/package.json /opt/mcp/package.json
+RUN cd /opt/mcp && npm install --omit=dev
+
+COPY mcp/index.mjs /opt/mcp/index.mjs
+
+# ── systemd units and scripts ─────────────────────────────────────────────────
+# mcp-server.service is NOT enabled here; vps-mcp-init.sh calls
+# "systemctl enable --now mcp-server" after writing /etc/vps-mcp-env.
+COPY systemd/mcp-server.service    /etc/systemd/system/mcp-server.service
+COPY systemd/vps-mcp-init.sh       /usr/local/bin/vps-mcp-init.sh
+COPY systemd/certbot-deploy.sh     /usr/local/bin/certbot-deploy.sh
+
+RUN chmod +x /usr/local/bin/vps-mcp-init.sh \
+             /usr/local/bin/certbot-deploy.sh
+
+RUN systemctl enable \
+    nginx \
+    postfix \
+    certbot-renew.timer
+
+# ── certbot deploy hook ───────────────────────────────────────────────────────
+RUN mkdir -p /etc/letsencrypt/renewal-hooks/deploy \
+    && ln -s /usr/local/bin/certbot-deploy.sh \
+             /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+
+# ── Webroot directory for certbot --webroot ───────────────────────────────────
+RUN mkdir -p /var/www/html/.well-known/acme-challenge
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
