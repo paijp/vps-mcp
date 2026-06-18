@@ -4,6 +4,11 @@ Startup scripts for building a Claude.ai MCP server on Sakura VPS (RockyLinux 9)
 
 > This code and documentation was written by Claude Sonnet 4.6 and Opus 4.7.
 
+> **Note:** The startup-script edition and the [`full/`](../full/) edition share the same
+> single-host design. Because of the Sakura "My Scripts" character limit, new features land
+> in the `full/` edition first and the two are expected to diverge — for the most up-to-date
+> behavior, refer to the `full/` edition.
+
 ## Security Policy
 
 These scripts provide root-level shell execution (`exec_command`) via MCP. This is not a bug — it is by design, to give Claude full control over a single VPS.
