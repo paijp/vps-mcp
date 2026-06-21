@@ -106,6 +106,7 @@ single notification email is sent at that moment.
 | `read_file` | Read a file from the VPS filesystem |
 | `write_file` | Write content to a file (large files supported; body limit raised to 25MB) |
 | `nginx_reload` | Validate and reload nginx (deferred so the SSE result is flushed first) |
+| `deploy_setup` | Generate a ready-to-commit GitHub Actions workflow that deploys files to this host via OIDC (see below) |
 
 ## Endpoints
 
@@ -117,6 +118,26 @@ single notification email is sent at that moment.
 | `/mcp/callback` | Exchanges the GitHub code, binds verified email to the PKCE challenge |
 | `/mcp/token` | Issues a Bearer iff resolved email matches `NOTIFY_EMAIL` |
 | `/mcp/sse`, `/mcp/messages` | MCP SSE transport (Bearer auth) |
+| `PUT /deploy/<path>` | Receive a file from GitHub Actions, authenticated by a GitHub OIDC JWT |
+
+## Deploy from GitHub (Actions OIDC → PUT)
+
+Push files to this host straight from a GitHub repository — no stored secret. A GitHub
+Actions workflow mints a short-lived **OIDC token** at runtime; the server verifies it
+(signature via GitHub's JWKS, plus `iss` / `aud` / `exp` / single-use `jti`) and writes the
+body under `DEPLOY_BASE_DIR`. Because byte content travels host-to-host (not through the
+model), binary and large files work without truncation.
+
+**Owner binding is automatic:** at GitHub login the server records your numeric account id
+(`/etc/mcp-server/deploy_owner`). `/deploy` then accepts OIDC tokens whose
+`repository_owner_id` matches — i.e. any repo/branch/event under your account. No other
+account can deploy. (To restrict by branch/event, add a claim check; the default is
+permissive by design.)
+
+Setup: complete a GitHub login through the connector, then call the **`deploy_setup`** MCP
+tool ("set up GitHub deploy"). It returns a ready-to-commit `.github/workflows/deploy.yml`
+pre-filled with this host. Commit it to a repo you own and pushes will deploy to
+`https://<host>/deploy/<dest>/…`.
 
 ## Environment
 
@@ -127,3 +148,5 @@ From `/etc/vps-mcp/host.env` and `/etc/vps-mcp/oauth.env`:
 | `SUBDOMAIN` | full hostname, e.g. `example.com` |
 | `NOTIFY_EMAIL` | the owner's email; only this GitHub account is allowed |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth App credentials |
+| `DEPLOY_BASE_DIR` | where `/deploy` writes files (default `/srv/deploy`) |
+| `DEPLOY_AUDIENCE` | required OIDC `aud` (default: `SUBDOMAIN`) |
