@@ -194,6 +194,9 @@ help:
 	install -m 644 systemd/mcp-server.service /etc/systemd/system/
 	systemctl daemon-reload
 
+	# ── deploy target dir (GitHub Actions OIDC → PUT /deploy) ─────────────────
+	mkdir -p /srv/deploy
+
 	# ── MCP credentials ──────────────────────────────────────────────────────
 	# The Bearer token is minted dynamically after a successful GitHub login;
 	# only its sha256 hash is ever written here (by the MCP server at login).
