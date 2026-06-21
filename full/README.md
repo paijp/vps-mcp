@@ -139,6 +139,12 @@ tool ("set up GitHub deploy"). It returns a ready-to-commit `.github/workflows/d
 pre-filled with this host. Commit it to a repo you own and pushes will deploy to
 `https://<host>/deploy/<dest>/…`.
 
+**Workflow chaining caveat:** the default trigger is `push`, which fires only on a *human*
+push. A push made by another workflow using the default `GITHUB_TOKEN` will **not** trigger
+it (GitHub blocks workflow chaining). If the files are produced by a build workflow, either
+add the deploy steps to that workflow, or call `deploy_setup` with `build_workflow` set to
+the build's name to get a `workflow_run`-triggered variant instead.
+
 ## Environment
 
 From `/etc/vps-mcp/host.env` and `/etc/vps-mcp/oauth.env`:

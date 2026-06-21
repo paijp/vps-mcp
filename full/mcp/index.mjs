@@ -488,19 +488,48 @@ function createMcpServer() {
     {
       src_dir:     z.string().optional().describe("Directory in the repo to upload (default: dist)"),
       dest_prefix: z.string().optional().describe("Path prefix under the deploy dir (default: site)"),
+      build_workflow: z.string().optional().describe(
+        "Name of a build workflow that produces the files. If set, the deploy " +
+        "triggers on that workflow's completion (workflow_run) instead of push — " +
+        "needed because a push made by another workflow's GITHUB_TOKEN does not " +
+        "trigger push-based workflows."),
     },
-    async ({ src_dir, dest_prefix }) => {
+    async ({ src_dir, dest_prefix, build_workflow }) => {
       const owner = deployOwner();
       const src  = src_dir     || "dist";
       const dest = dest_prefix || "site";
       // Built from double-quoted strings so the workflow's own ${{ }} / ${VAR}
       // are emitted literally (not interpolated as JS template substitutions).
+      // Trigger: GITHUB_TOKEN-driven pushes do NOT trigger push workflows
+      // (GitHub blocks workflow chaining), so when the files come from another
+      // workflow, use workflow_run instead.
+      const trigger = build_workflow
+        ? [
+            "on:",
+            "  # Runs after the build workflow finishes. workflow_run is required",
+            "  # because a push made by another workflow's GITHUB_TOKEN does NOT",
+            "  # trigger push-based workflows. (Note: workflow_run runs in the",
+            "  # default-branch context — checkout the right ref or download the",
+            "  # build's artifacts as needed.)",
+            "  workflow_run:",
+            "    workflows: [\"" + build_workflow + "\"]",
+            "    types: [completed]",
+          ]
+        : [
+            "on:",
+            "  # Triggers on a HUMAN push to " + src + "/. A push made by ANOTHER",
+            "  # workflow using the default GITHUB_TOKEN will NOT trigger this",
+            "  # (GitHub blocks workflow chaining). If these files are produced by",
+            "  # a build workflow, either add the deploy steps directly to that",
+            "  # workflow, or call deploy_setup with build_workflow set to use the",
+            "  # workflow_run trigger instead.",
+            "  push:",
+            "    branches: [main]",
+            "    paths: ['" + src + "/**']",
+          ];
       const yaml = [
         "name: deploy-to-vps",
-        "on:",
-        "  push:",
-        "    branches: [main]",
-        "    paths: ['" + src + "/**']",
+        ...trigger,
         "",
         "permissions:",
         "  id-token: write          # required to mint the OIDC token",
@@ -550,12 +579,21 @@ function createMcpServer() {
         : `WARNING: no deploy owner is bound yet. Complete a GitHub login through ` +
           `the connector first, then re-run deploy_setup.`;
 
+      const triggerNote = build_workflow
+        ? `Triggered on completion of the "${build_workflow}" workflow (workflow_run).`
+        : `Triggered on a human push to ${src}/. IMPORTANT: a push made by another ` +
+          `workflow using the default GITHUB_TOKEN will NOT trigger this (GitHub blocks ` +
+          `workflow chaining) — if ${src}/ is written by a build workflow, either add ` +
+          `these deploy steps to that workflow, or re-run deploy_setup with ` +
+          `build_workflow set to use the workflow_run trigger.`;
+
       const instructions =
         `${ownerLine}\n\n` +
         `Commit the YAML below to .github/workflows/deploy.yml in a repository owned ` +
-        `by that account. On push to main (paths ${src}/**), files in ${src}/ are ` +
-        `uploaded to https://${DEPLOY_AUDIENCE}/deploy/${dest}/<path> (server dir ` +
+        `by that account. Files in ${src}/ are uploaded to ` +
+        `https://${DEPLOY_AUDIENCE}/deploy/${dest}/<path> (server dir ` +
         `${DEPLOY_BASE_DIR}/${dest}/). No secret is stored — auth is the GitHub OIDC token.\n\n` +
+        `${triggerNote}\n\n` +
         "```yaml\n" + yaml + "\n```\n";
 
       return { content: [{ type: "text", text: instructions }] };
