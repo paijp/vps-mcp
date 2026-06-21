@@ -23,6 +23,19 @@ This server provides **root-level shell execution (`exec_command`) via MCP** by 
 The Bearer token is minted dynamically at login and only its sha256 hash is stored
 (`/etc/mcp-server/hash`). Email notification fires **only** at token issuance.
 
+### Fixed token (opt-in)
+
+By default each successful login mints a fresh random token and overwrites the hash, so the
+previous token is rotated out and only the hash is ever stored. If you instead place a
+root-only `mode 600` file at `/etc/mcp-server/token` (≥32 chars), `/mcp/token` reuses its
+contents on every issuance, so the **same Bearer can be issued repeatedly** — useful for
+sharing one token across accounts or for stable reconnection.
+
+The GitHub-login gate still guards issuance (a caller must pass GitHub login + `NOTIFY_EMAIL`
+match to receive it). The trade-offs: the plaintext token then lives **at rest** (weakening
+the hash-only property), and login **no longer rotates** it. To revoke, delete both
+`/etc/mcp-server/token` and `/etc/mcp-server/hash`.
+
 ## Prerequisites
 
 - A VPS (RockyLinux / Debian-family) with root, ≥512MB RAM.

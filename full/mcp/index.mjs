@@ -232,7 +232,20 @@ app.post("/mcp/token", (req, res) => {
   if (!entry.email || entry.email.toLowerCase() !== NOTIFY_EMAIL.toLowerCase())
     return res.status(403).send();
 
-  const token = crypto.randomBytes(32).toString("hex");
+  // Opt-in fixed token: if a token file exists (root-placed, mode 600), reuse
+  // its contents instead of minting a random one, so the same Bearer can be
+  // issued repeatedly (e.g. shared across accounts / stable reconnection). The
+  // GitHub-login gate above still guards issuance; the trade-off is that the
+  // plaintext token then lives at rest, weakening the hash-only property, and
+  // login no longer rotates it. Revoke by deleting the token file and the hash.
+  // A missing, empty, or too-short file falls back to a fresh random token.
+  let token;
+  try {
+    const t = readFileSync(`${MFN}/token`, "utf8").trim();
+    token = t.length >= 32 ? t : crypto.randomBytes(32).toString("hex");
+  } catch {
+    token = crypto.randomBytes(32).toString("hex");
+  }
   writeFileSync(`${MFN}/hash`, sha256hex(token), { mode: 0o600 });
 
   if (NOTIFY_EMAIL) {
