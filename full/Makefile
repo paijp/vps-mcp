@@ -15,7 +15,7 @@ word2_of = $(word 2,$(subst __, ,$(1)))
 word3_of = $(word 3,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help
+.PHONY: help update
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -31,6 +31,11 @@ help:
 	@printf "  https://<DOMAIN>/mcp/callback) and run:\n"
 	@printf "  make oauth.done\n"
 	@printf "      Applies the credentials (restarts mcp-server).\n\n"
+	@printf "Update an already-set-up host (after git pull):\n"
+	@printf "  make update\n"
+	@printf "      Reinstalls /opt/mcp (index.mjs, package.json+deps), the\n"
+	@printf "      systemd unit, /srv/deploy, and restarts mcp-server. Does not\n"
+	@printf "      touch the nginx config (certbot manages TLS there).\n\n"
 	@printf "Variables (auto-read from /etc/vps-mcp/host.env after setupdone):\n"
 	@printf "  DOMAIN  IP  EMAIL\n"
 
@@ -259,3 +264,20 @@ oauth.done: /etc/vps-mcp/oauth.env
 	systemctl restart mcp-server
 	@touch $@
 	@printf "OAuth applied. Connect via https://$(DOMAIN)/mcp/sse and log in with GitHub.\n"
+
+# ── update MCP server code (git pull && make update) ──────────────────────────
+# Refresh the MCP app from this checkout without re-running full host setup.
+# Does NOT touch the nginx config: certbot rewrites TLS lines in the live conf,
+# so overwriting it would revert HTTPS. If full/nginx/vps-mcp.conf changed,
+# merge it into the live conf manually.
+update:
+	install -m 644 mcp/index.mjs    /opt/mcp/index.mjs
+	install -m 644 mcp/package.json /opt/mcp/package.json
+	cd /opt/mcp && npm install --omit=dev
+	install -m 644 systemd/mcp-server.service /etc/systemd/system/
+	mkdir -p /srv/deploy
+	systemctl daemon-reload
+	systemctl restart mcp-server
+	@printf "Updated /opt/mcp and restarted mcp-server.\n"
+	@printf "Note: nginx config not touched. If full/nginx/vps-mcp.conf changed,\n"
+	@printf "merge it into the live /etc/nginx conf manually (certbot owns TLS lines).\n"

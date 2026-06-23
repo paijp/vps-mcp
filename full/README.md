@@ -98,6 +98,19 @@ On connect, the browser is sent through GitHub login. A Bearer is issued **only*
 verified primary email matches `NOTIFY_EMAIL` (set to the owner's email during setup). A
 single notification email is sent at that moment.
 
+### Updating an already-set-up host
+
+After pulling a newer version of this repo onto the host:
+
+```
+make update
+```
+
+This reinstalls `/opt/mcp` (`index.mjs`, `package.json` + deps), the systemd unit and
+`/srv/deploy`, then restarts `mcp-server` — without re-running the full host setup. It does
+**not** touch the nginx config (certbot rewrites the TLS lines there); if
+`full/nginx/vps-mcp.conf` changed, merge it into the live conf manually.
+
 ## MCP tools
 
 | Tool | Function |
