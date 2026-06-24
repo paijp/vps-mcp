@@ -133,7 +133,7 @@ lines there); if `full/nginx/vps-mcp.conf` changed, merge it into the live conf 
 | `/mcp/callback` | Exchanges the GitHub code, binds verified email to the PKCE challenge |
 | `/mcp/token` | Issues a Bearer iff resolved email matches `NOTIFY_EMAIL` |
 | `/mcp/sse`, `/mcp/messages` | MCP SSE transport (Bearer auth) |
-| `PUT /deploy/<path>` | Receive a file from GitHub Actions, authenticated by a GitHub OIDC JWT |
+| `PUT /mcp/messages/deploy/<path>` | Receive a file from GitHub Actions, authenticated by a GitHub OIDC JWT (under the already-proxied `/mcp/messages` prefix, so no extra nginx location) |
 
 ## Deploy from GitHub (Actions OIDC → PUT)
 
@@ -143,8 +143,12 @@ Actions workflow mints a short-lived **OIDC token** at runtime; the server verif
 body under `DEPLOY_BASE_DIR`. Because byte content travels host-to-host (not through the
 model), binary and large files work without truncation.
 
+The receiver lives at `/mcp/messages/deploy/…`, under the already-proxied `/mcp/messages`
+prefix, so **no dedicated nginx location is required** — `make mcpupdate` alone enables it on
+an already-set-up host.
+
 **Owner binding is automatic:** at GitHub login the server records your numeric account id
-(`/etc/mcp-server/deploy_owner`). `/deploy` then accepts OIDC tokens whose
+(`/etc/mcp-server/deploy_owner`). The deploy endpoint then accepts OIDC tokens whose
 `repository_owner_id` matches — i.e. any repo/branch/event under your account. No other
 account can deploy. (To restrict by branch/event, add a claim check; the default is
 permissive by design.)
@@ -152,7 +156,7 @@ permissive by design.)
 Setup: complete a GitHub login through the connector, then call the **`deploy_setup`** MCP
 tool ("set up GitHub deploy"). It returns a ready-to-commit `.github/workflows/deploy.yml`
 pre-filled with this host. Commit it to a repo you own and pushes will deploy to
-`https://<host>/deploy/<dest>/…`.
+`https://<host>/mcp/messages/deploy/<dest>/…`.
 
 **Workflow chaining caveat:** the default trigger is `push`, which fires only on a *human*
 push. A push made by another workflow using the default `GITHUB_TOKEN` will **not** trigger
@@ -169,5 +173,5 @@ From `/etc/vps-mcp/host.env` and `/etc/vps-mcp/oauth.env`:
 | `SUBDOMAIN` | full hostname, e.g. `example.com` |
 | `NOTIFY_EMAIL` | the owner's email; only this GitHub account is allowed |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub OAuth App credentials |
-| `DEPLOY_BASE_DIR` | where `/deploy` writes files (default `/srv/deploy`) |
+| `DEPLOY_BASE_DIR` | where the deploy endpoint writes files (default `/srv/deploy`) |
 | `DEPLOY_AUDIENCE` | required OIDC `aud` (default: `SUBDOMAIN`) |
