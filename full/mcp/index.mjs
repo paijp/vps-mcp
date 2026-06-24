@@ -392,7 +392,7 @@ function createMcpServer() {
 
   mcp.tool(
     "exec_command",
-    "Execute a shell command on the VPS. Returns stdout and stderr.",
+    `Execute a shell command on the VPS (${SUBDOMAIN}). Returns stdout and stderr.`,
     { command: z.string().describe("Shell command to run") },
     async ({ command }) => {
       try {
@@ -414,7 +414,7 @@ function createMcpServer() {
 
   mcp.tool(
     "read_file",
-    "Read a file from the VPS filesystem.",
+    `Read a file from the VPS (${SUBDOMAIN}) filesystem.`,
     { path: z.string().describe("Absolute path to the file") },
     async ({ path: filePath }) => {
       try {
@@ -428,7 +428,7 @@ function createMcpServer() {
 
   mcp.tool(
     "write_file",
-    "Write content to a file on the VPS filesystem.",
+    `Write content to a file on the VPS (${SUBDOMAIN}) filesystem.`,
     {
       path:    z.string().describe("Absolute path to the file"),
       content: z.string().describe("Content to write"),
@@ -446,7 +446,8 @@ function createMcpServer() {
 
   mcp.tool(
     "nginx_reload",
-    "Reload the nginx configuration. Always use this instead of running " +
+    `Reload the nginx configuration on the VPS (${SUBDOMAIN}). ` +
+      "Always use this instead of running " +
       "'nginx -s reload' / 'systemctl reload nginx' via exec_command: the MCP " +
       "SSE connection is proxied through nginx, so a synchronous reload can " +
       "interrupt it before the tool result is delivered and stall the client " +
@@ -480,7 +481,7 @@ function createMcpServer() {
   mcp.tool(
     "deploy_setup",
     "Generate a ready-to-commit GitHub Actions workflow that deploys files from " +
-      "a repository to this host over HTTPS using GitHub OIDC (no stored secret). " +
+      `a repository to this host (${SUBDOMAIN}) over HTTPS using GitHub OIDC (no stored secret). ` +
       "Files are PUT to /deploy and land under the host's deploy directory. " +
       "Commit the returned YAML to .github/workflows/deploy.yml in a repository " +
       "owned by the GitHub account that logged in here. Deploys are accepted from " +
