@@ -485,7 +485,8 @@ function createMcpServer() {
 
   mcp.tool(
     "read_file",
-    `Read a file from the VPS (${SUBDOMAIN}) filesystem.`,
+    `Read a file from the VPS (${SUBDOMAIN}) filesystem.` +
+      hostInfoLine(),
     { path: z.string().describe("Absolute path to the file") },
     async ({ path: filePath }) => {
       try {
@@ -499,7 +500,8 @@ function createMcpServer() {
 
   mcp.tool(
     "write_file",
-    `Write content to a file on the VPS (${SUBDOMAIN}) filesystem.`,
+    `Write content to a file on the VPS (${SUBDOMAIN}) filesystem.` +
+      hostInfoLine(),
     {
       path:    z.string().describe("Absolute path to the file"),
       content: z.string().describe("Content to write"),
@@ -523,7 +525,8 @@ function createMcpServer() {
       "SSE connection is proxied through nginx, so a synchronous reload can " +
       "interrupt it before the tool result is delivered and stall the client " +
       "until timeout. This validates the config, returns immediately, then " +
-      "defers the actual reload so the result is flushed first.",
+      "defers the actual reload so the result is flushed first." +
+      hostInfoLine(),
     {},
     async () => {
       // Validate the config before touching the running server. nginx -t
@@ -556,7 +559,8 @@ function createMcpServer() {
       "Files are PUT to /deploy and land under the host's deploy directory. " +
       "Commit the returned YAML to .github/workflows/deploy.yml in a repository " +
       "owned by the GitHub account that logged in here. Deploys are accepted from " +
-      "any branch or event in that account (only the owner is checked).",
+      "any branch or event in that account (only the owner is checked)." +
+      hostInfoLine(),
     {
       src_dir:     z.string().optional().describe("Directory in the repo to upload (default: dist)"),
       dest_prefix: z.string().optional().describe("Path prefix under the deploy dir (default: site)"),
