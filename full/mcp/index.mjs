@@ -150,11 +150,13 @@ async function handleDeploy(req, res) {
 
 const app = express();
 
-// /deploy receives raw bytes (binary safe) and must be registered BEFORE the
-// JSON/urlencoded parsers below: curl --data-binary defaults to a urlencoded
-// content-type, which would otherwise consume the stream. type:()=>true makes
-// express.raw accept any content-type.
-app.put("/deploy/*", express.raw({ type: () => true, limit: "25mb" }), handleDeploy);
+// Receiver for GitHub Actions deploys. Hosted UNDER the already-proxied
+// /mcp/messages prefix so no dedicated nginx location is needed (that location
+// already proxies to this server with client_max_body_size 25m). Registered
+// BEFORE the JSON/urlencoded parsers below: curl --data-binary defaults to a
+// urlencoded content-type, which would otherwise consume the stream.
+// type:()=>true makes express.raw accept any content-type.
+app.put("/mcp/messages/deploy/*", express.raw({ type: () => true, limit: "25mb" }), handleDeploy);
 
 // Express defaults the JSON body limit to 100KB. write_file delivers the file
 // content inside the JSON-RPC request body, so a modest file (the JSON-RPC
@@ -539,7 +541,7 @@ function createMcpServer() {
         "env:",
         "  VPS_HOST: " + DEPLOY_AUDIENCE + "      # this host (OIDC audience)",
         "  SRC_DIR: " + src,
-        "  DEST_PREFIX: " + dest + "        # files land under /deploy/<DEST_PREFIX>/",
+        "  DEST_PREFIX: " + dest + "        # files land under <deploy dir>/<DEST_PREFIX>/",
         "",
         "jobs:",
         "  deploy:",
@@ -569,7 +571,7 @@ function createMcpServer() {
         "              -X PUT --data-binary @\"$f\" \\",
         "              -H \"Authorization: Bearer $TOKEN\" \\",
         "              -H 'Content-Type: application/octet-stream' \\",
-        "              \"https://${VPS_HOST}/deploy/${DEST_PREFIX}/${rel}\")",
+        "              \"https://${VPS_HOST}/mcp/messages/deploy/${DEST_PREFIX}/${rel}\")",
         "            test \"$code\" = \"200\" || { echo \"failed: $rel -> HTTP $code\"; exit 1; }",
         "          done",
       ].join("\n");
@@ -592,7 +594,7 @@ function createMcpServer() {
         `${ownerLine}\n\n` +
         `Commit the YAML below to .github/workflows/deploy.yml in a repository owned ` +
         `by that account. Files in ${src}/ are uploaded to ` +
-        `https://${DEPLOY_AUDIENCE}/deploy/${dest}/<path> (server dir ` +
+        `https://${DEPLOY_AUDIENCE}/mcp/messages/deploy/${dest}/<path> (server dir ` +
         `${DEPLOY_BASE_DIR}/${dest}/). No secret is stored — auth is the GitHub OIDC token.\n\n` +
         `${triggerNote}\n\n` +
         "```yaml\n" + yaml + "\n```\n";
