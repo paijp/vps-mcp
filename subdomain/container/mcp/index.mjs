@@ -16,6 +16,9 @@
  *                     a Bearer only if that email matches NOTIFY_EMAIL
  *   - /mcp/sse        SSE transport (Bearer auth)
  *   - /mcp/messages   SSE message channel (Bearer auth)
+ *   - PUT /mcp/messages/deploy/*  GitHub Actions OIDC → file PUT under
+ *                     DEPLOY_BASE_DIR (owner bound at login; not on the oauth
+ *                     container). Served under the already-proxied /mcp/messages.
  *
  * Endpoints on the oauth container (enabled when GITHUB_CLIENT_ID is set):
  *   - /mcp/start      validates claude_redirect host, redirects to GitHub authorize
@@ -23,8 +26,10 @@
  *                     verified primary email, mints an authorization code bound to
  *                     { challenge, email }, then redirects the browser back to
  *                     claude.ai with that code
- *   - /mcp/resolve    given { code, code_verifier }, returns the email if the code
- *                     exists and sha256(verifier) == its stored challenge
+ *   - /mcp/resolve    given { code, code_verifier }, returns { email, owner_id,
+ *                     owner_login } if the code exists and sha256(verifier) ==
+ *                     its stored challenge. owner_id binds the seminar
+ *                     container's /deploy owner (OIDC repository_owner_id).
  *
  * Environment variables (set by vps-mcp-init.service):
  *   SUBDOMAIN          – full hostname, e.g. alice.example.com
@@ -41,6 +46,7 @@ import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import express from "express";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
@@ -55,6 +61,14 @@ const GH_CLIENT_ID     = process.env.GITHUB_CLIENT_ID     || "";
 const GH_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || "";
 const PORT          = 3000;
 const EXEC_TIMEOUT  = 60_000;
+
+// GitHub Actions OIDC → file PUT (/deploy). Deploys are accepted from any
+// workflow run in the owner's account: only repository_owner_id is checked
+// (plus issuer/audience/exp/jti), not the branch or event. The owner is the
+// GitHub account whose login bound this container (see /mcp/token below).
+const DEPLOY_BASE_DIR  = process.env.DEPLOY_BASE_DIR || "/srv/deploy";
+const DEPLOY_AUDIENCE  = process.env.DEPLOY_AUDIENCE || SUBDOMAIN;
+const GH_OIDC_ISSUER   = "https://token.actions.githubusercontent.com";
 
 // The oauth role is active when GitHub credentials are present.
 const IS_OAUTH = Boolean(GH_CLIENT_ID && GH_CLIENT_SECRET);
@@ -72,7 +86,92 @@ const isClaudeRedirect = u => {
   try { return new URL(u).hostname === "claude.ai"; } catch { return false; }
 };
 
+// Line appended to tool descriptions so Claude can tell which host this
+// connector is bound to — guarding against acting on the wrong VPS. One
+// container serves exactly one subdomain, so the subdomain alone identifies it.
+function hostInfoLine() {
+  return `\nThis connector is bound to the VPS ${SUBDOMAIN}.`;
+}
+
+// ── GitHub OIDC verification (for /deploy) ────────────────────────────────────
+// GitHub publishes its public keys at the JWKS endpoint; jose fetches and caches
+// them (and refetches on key rotation). Only the owner bound at GitHub login
+// (${MFN}/deploy_owner) may deploy. Not used on the oauth (broker) container.
+const JWKS = createRemoteJWKSet(new URL(`${GH_OIDC_ISSUER}/.well-known/jwks`));
+
+// jti single-use cache for replay protection: jti -> expiry(ms). OIDC tokens
+// are short-lived; a used jti is rejected until it expires, then swept.
+const usedJti = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, exp] of usedJti) if (exp <= now) usedJti.delete(k);
+}, 60_000).unref();
+
+// { id, login } persisted at GitHub login (in /mcp/token). Null if not bound yet.
+function deployOwner() {
+  try { return JSON.parse(readFileSync(`${MFN}/deploy_owner`, "utf8")); }
+  catch { return null; }
+}
+
+async function verifyDeployToken(jwt) {
+  // jwtVerify checks signature (RS256 via JWKS), iss, aud and exp.
+  const { payload } = await jwtVerify(jwt, JWKS, {
+    issuer:   GH_OIDC_ISSUER,
+    audience: DEPLOY_AUDIENCE,
+  });
+  const owner = deployOwner();
+  if (!owner || !owner.id) throw new Error("deploy owner not bound");
+  if (String(payload.repository_owner_id) !== String(owner.id))
+    throw new Error("owner mismatch");
+  // Anti-replay: PUT bodies are not signed, so a captured token could otherwise
+  // be replayed within its exp window with different content. Single-use jti
+  // closes that. (TLS + short exp already make capture hard.)
+  if (payload.jti) {
+    if (usedJti.has(payload.jti)) throw new Error("replay");
+    usedJti.set(payload.jti, (payload.exp || 0) * 1000);
+  }
+  return payload;
+}
+
+// Resolve a request path under DEPLOY_BASE_DIR, rejecting traversal.
+function resolveDeployPath(rel) {
+  const dest = path.resolve(DEPLOY_BASE_DIR, rel);
+  if (dest !== DEPLOY_BASE_DIR && !dest.startsWith(DEPLOY_BASE_DIR + path.sep))
+    return null;
+  return dest;
+}
+
+async function handleDeploy(req, res) {
+  const m = (req.headers.authorization || "").match(/^Bearer\s+(.+)$/i);
+  if (!m) return res.status(401).send();
+  try {
+    await verifyDeployToken(m[1]);
+  } catch {
+    return res.status(401).send();
+  }
+  const dest = resolveDeployPath(req.params[0] || "");
+  if (!dest) return res.status(400).send();
+  try {
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    await fs.writeFile(dest, req.body);
+    return res.status(200).send("ok");
+  } catch (err) {
+    return res.status(500).send(String(err.message || err));
+  }
+}
+
 const app = express();
+
+// Receiver for GitHub Actions deploys. Hosted UNDER the already-proxied
+// /mcp/messages prefix so no dedicated nginx location is needed (that location
+// already proxies to this server with client_max_body_size 25m). Registered
+// BEFORE the JSON/urlencoded parsers below: curl --data-binary defaults to a
+// urlencoded content-type, which would otherwise consume the stream.
+// type:()=>true makes express.raw accept any content-type. Disabled on the
+// oauth (broker) container, which serves no content.
+if (!IS_OAUTH) {
+  app.put("/mcp/messages/deploy/*", express.raw({ type: () => true, limit: "25mb" }), handleDeploy);
+}
 // Express defaults the JSON body limit to 100KB. write_file delivers the file
 // content inside the JSON-RPC request body, so a modest file (the JSON-RPC
 // envelope plus string escaping inflate it further) can exceed that and fail
@@ -145,7 +244,7 @@ app.post("/mcp/token", async (req, res) => {
   const { code, code_verifier } = req.body;
   if (!OAUTH_BASE) return res.status(500).send();
 
-  let email;
+  let resolved;
   try {
     const r = await fetch(`${OAUTH_BASE}/mcp/resolve`, {
       method:  "POST",
@@ -153,16 +252,32 @@ app.post("/mcp/token", async (req, res) => {
       body:    JSON.stringify({ code, code_verifier }),
     });
     if (!r.ok) return res.status(403).send();
-    ({ email } = await r.json());
+    resolved = await r.json();
   } catch {
     return res.status(502).send();
   }
 
+  const email = resolved.email;
   if (!email || email.toLowerCase() !== NOTIFY_EMAIL.toLowerCase())
     return res.status(403).send();
 
   const token = crypto.randomBytes(32).toString("hex");
   writeFileSync(`${MFN}/hash`, sha256hex(token), { mode: 0o600 });
+
+  // Bind this container's /deploy owner to the verified GitHub account (numeric
+  // id is immutable; login is for display only). Enables GitHub Actions OIDC
+  // PUT /deploy. owner_id is absent when talking to an older oauth container —
+  // then deploy simply stays unbound (deploy_setup shows a warning). Forward-
+  // compatible: unknown extra fields from /mcp/resolve are ignored.
+  if (!IS_OAUTH && resolved.owner_id) {
+    try {
+      writeFileSync(
+        `${MFN}/deploy_owner`,
+        JSON.stringify({ id: String(resolved.owner_id), login: String(resolved.owner_login || "") }),
+        { mode: 0o600 }
+      );
+    } catch { /* non-fatal: deploy owner just won't be set this login */ }
+  }
 
   if (NOTIFY_EMAIL) {
     const m = spawn("/usr/sbin/sendmail", ["-f", `noreply@${MAIL_DOMAIN}`, NOTIFY_EMAIL]);
@@ -246,12 +361,27 @@ if (IS_OAUTH) {
         : null;
       if (!primary) return res.status(403).send();
 
+      // Also fetch the numeric account id and login, so a successful login can
+      // bind the seminar container's /deploy owner (OIDC repository_owner_id).
+      let ghId = "", ghLogin = "";
+      try {
+        const uRes = await fetch("https://api.github.com/user", {
+          headers: {
+            authorization: `Bearer ${tok.access_token}`,
+            accept:        "application/vnd.github+json",
+            "user-agent":  "vps-mcp",
+          },
+        });
+        const u = await uRes.json();
+        if (u && u.id) { ghId = String(u.id); ghLogin = String(u.login || ""); }
+      } catch { /* non-fatal: deploy owner just won't be set this login */ }
+
       // Issue our own authorization code, bound to the PKCE challenge and email.
       // It is delivered only to claude.ai (redirect_uri is host-locked above), so
       // an attacker who merely holds a verifier cannot obtain it and thus cannot
       // resolve — this is what stops login-CSRF / authorization-code fixation.
       const authCode = crypto.randomBytes(32).toString("hex");
-      pending.set(authCode, { challenge: st.challenge, email: primary.email, createdAt: Date.now() });
+      pending.set(authCode, { challenge: st.challenge, email: primary.email, ghId, ghLogin, createdAt: Date.now() });
 
       const url = new URL(st.claude_redirect);
       url.searchParams.set("code", authCode);
@@ -276,7 +406,7 @@ if (IS_OAUTH) {
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b))
       return res.status(403).send();
     pending.delete(code);
-    res.json({ email: entry.email });
+    res.json({ email: entry.email, owner_id: entry.ghId, owner_login: entry.ghLogin });
   });
 }
 
@@ -305,7 +435,8 @@ function createMcpServer() {
 
   mcp.tool(
     "exec_command",
-    "Execute a shell command on the VPS. Returns stdout and stderr.",
+    "Execute a shell command on the VPS. Returns stdout and stderr." +
+      hostInfoLine(),
     { command: z.string().describe("Shell command to run") },
     async ({ command }) => {
       try {
@@ -327,7 +458,8 @@ function createMcpServer() {
 
   mcp.tool(
     "read_file",
-    "Read a file from the VPS filesystem.",
+    "Read a file from the VPS filesystem." +
+      hostInfoLine(),
     { path: z.string().describe("Absolute path to the file") },
     async ({ path: filePath }) => {
       try {
@@ -341,7 +473,8 @@ function createMcpServer() {
 
   mcp.tool(
     "write_file",
-    "Write content to a file on the VPS filesystem.",
+    "Write content to a file on the VPS filesystem." +
+      hostInfoLine(),
     {
       path:    z.string().describe("Absolute path to the file"),
       content: z.string().describe("Content to write"),
@@ -364,7 +497,8 @@ function createMcpServer() {
       "SSE connection is proxied through nginx, so a synchronous reload can " +
       "interrupt it before the tool result is delivered and stall the client " +
       "until timeout. This validates the config, returns immediately, then " +
-      "defers the actual reload so the result is flushed first.",
+      "defers the actual reload so the result is flushed first." +
+      hostInfoLine(),
     {},
     async () => {
       // Validate the config before touching the running server. nginx -t
@@ -389,6 +523,130 @@ function createMcpServer() {
       return { content: [{ type: "text", text: `nginx config valid; reload scheduled\n${report}` }] };
     }
   );
+
+  // deploy_setup is offered on content containers only (not the oauth broker).
+  if (!IS_OAUTH) {
+    mcp.tool(
+      "deploy_setup",
+      "Generate a ready-to-commit GitHub Actions workflow that deploys files from " +
+        `a repository to this host (${SUBDOMAIN}) over HTTPS using GitHub OIDC (no stored secret). ` +
+        "Files are PUT to /deploy and land under the host's deploy directory. " +
+        "Commit the returned YAML to .github/workflows/deploy.yml in a repository " +
+        "owned by the GitHub account that logged in here. Deploys are accepted from " +
+        "any branch or event in that account (only the owner is checked)." +
+        hostInfoLine(),
+      {
+        src_dir:     z.string().optional().describe("Directory in the repo to upload (default: dist)"),
+        dest_prefix: z.string().optional().describe("Path prefix under the deploy dir (default: site)"),
+        build_workflow: z.string().optional().describe(
+          "Name of a build workflow that produces the files. If set, the deploy " +
+          "triggers on that workflow's completion (workflow_run) instead of push — " +
+          "needed because a push made by another workflow's GITHUB_TOKEN does not " +
+          "trigger push-based workflows."),
+      },
+      async ({ src_dir, dest_prefix, build_workflow }) => {
+        const owner = deployOwner();
+        const src  = src_dir     || "dist";
+        const dest = dest_prefix || "site";
+        // Built from double-quoted strings so the workflow's own ${{ }} / ${VAR}
+        // are emitted literally (not interpolated as JS template substitutions).
+        const trigger = build_workflow
+          ? [
+              "on:",
+              "  # Runs after the build workflow finishes. workflow_run is required",
+              "  # because a push made by another workflow's GITHUB_TOKEN does NOT",
+              "  # trigger push-based workflows. (Note: workflow_run runs in the",
+              "  # default-branch context — checkout the right ref or download the",
+              "  # build's artifacts as needed.)",
+              "  workflow_run:",
+              "    workflows: [\"" + build_workflow + "\"]",
+              "    types: [completed]",
+            ]
+          : [
+              "on:",
+              "  # Triggers on a HUMAN push to " + src + "/. A push made by ANOTHER",
+              "  # workflow using the default GITHUB_TOKEN will NOT trigger this",
+              "  # (GitHub blocks workflow chaining). If these files are produced by",
+              "  # a build workflow, either add the deploy steps directly to that",
+              "  # workflow, or call deploy_setup with build_workflow set to use the",
+              "  # workflow_run trigger instead.",
+              "  push:",
+              "    branches: [main]",
+              "    paths: ['" + src + "/**']",
+            ];
+        const yaml = [
+          "name: deploy-to-vps",
+          ...trigger,
+          "",
+          "permissions:",
+          "  id-token: write          # required to mint the OIDC token",
+          "  contents: read",
+          "",
+          "env:",
+          "  VPS_HOST: " + DEPLOY_AUDIENCE + "      # this host (OIDC audience)",
+          "  SRC_DIR: " + src,
+          "  DEST_PREFIX: " + dest + "        # files land under <deploy dir>/<DEST_PREFIX>/",
+          "",
+          "jobs:",
+          "  deploy:",
+          "    runs-on: ubuntu-latest",
+          "    steps:",
+          "      - uses: actions/checkout@v4",
+          "",
+          "      - name: Mint GitHub OIDC token (audience = VPS host)",
+          "        id: oidc",
+          "        run: |",
+          "          TOKEN=$(curl -sS \\",
+          "            -H \"Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN\" \\",
+          "            \"$ACTIONS_ID_TOKEN_REQUEST_URL&audience=${VPS_HOST}\" | jq -r '.value')",
+          "          echo \"::add-mask::$TOKEN\"",
+          "          echo \"token=$TOKEN\" >> \"$GITHUB_OUTPUT\"",
+          "",
+          "      - name: PUT files to VPS /deploy",
+          "        env:",
+          "          TOKEN: ${{ steps.oidc.outputs.token }}",
+          "        run: |",
+          "          set -euo pipefail",
+          "          cd \"$SRC_DIR\"",
+          "          find . -type f -print0 | while IFS= read -r -d '' f; do",
+          "            rel=\"${f#./}\"",
+          "            echo \"PUT $rel\"",
+          "            code=$(curl -sS -o /dev/null -w '%{http_code}' \\",
+          "              -X PUT --data-binary @\"$f\" \\",
+          "              -H \"Authorization: Bearer $TOKEN\" \\",
+          "              -H 'Content-Type: application/octet-stream' \\",
+          "              \"https://${VPS_HOST}/mcp/messages/deploy/${DEST_PREFIX}/${rel}\")",
+          "            test \"$code\" = \"200\" || { echo \"failed: $rel -> HTTP $code\"; exit 1; }",
+          "          done",
+        ].join("\n");
+
+        const ownerLine = owner && owner.id
+          ? `Deploy owner bound to GitHub @${owner.login || "?"} (id ${owner.id}); ` +
+            `OIDC tokens from any repo under this account are accepted.`
+          : `WARNING: no deploy owner is bound yet. Complete a GitHub login through ` +
+            `the connector first, then re-run deploy_setup.`;
+
+        const triggerNote = build_workflow
+          ? `Triggered on completion of the "${build_workflow}" workflow (workflow_run).`
+          : `Triggered on a human push to ${src}/. IMPORTANT: a push made by another ` +
+            `workflow using the default GITHUB_TOKEN will NOT trigger this (GitHub blocks ` +
+            `workflow chaining) — if ${src}/ is written by a build workflow, either add ` +
+            `these deploy steps to that workflow, or re-run deploy_setup with ` +
+            `build_workflow set to use the workflow_run trigger.`;
+
+        const instructions =
+          `${ownerLine}\n\n` +
+          `Commit the YAML below to .github/workflows/deploy.yml in a repository owned ` +
+          `by that account. Files in ${src}/ are uploaded to ` +
+          `https://${DEPLOY_AUDIENCE}/mcp/messages/deploy/${dest}/<path> (server dir ` +
+          `${DEPLOY_BASE_DIR}/${dest}/). No secret is stored — auth is the GitHub OIDC token.\n\n` +
+          `${triggerNote}\n\n` +
+          "```yaml\n" + yaml + "\n```\n";
+
+        return { content: [{ type: "text", text: instructions }] };
+      }
+    );
+  }
 
   return mcp;
 }

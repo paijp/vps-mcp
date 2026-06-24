@@ -15,7 +15,7 @@ sub_of    = $(word 1,$(subst __, ,$(1)))
 email_of  = $(word 2,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list
+.PHONY: help image install-binaries install-services list mcpupdate-image mcpupdate mcpupdate-one
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -36,6 +36,11 @@ help:
 	@printf "  make alice__alice@ex.com.done      Create VPS for alice\n"
 	@printf "  make default__admin@ex.com.done    Create default container (serves parent domain)\n"
 	@printf "  make list                          List running VPS containers\n\n"
+	@printf "Update the MCP app (index.mjs / package.json):\n"
+	@printf "  make mcpupdate-image      Rebuild the image (affects ONLY containers created later)\n"
+	@printf "  make mcpupdate            Update ALL running containers in place (cp + npm install + restart)\n"
+	@printf "  make mcpupdate-one CONTAINER=alice-web   Update a single running container\n"
+	@printf "      Run BOTH mcpupdate-image and mcpupdate to cover existing and future containers.\n\n"
 	@printf "Variables:\n"
 	@printf "  IMAGE   Container image tag (default: vps-mcp:latest)\n"
 
@@ -268,3 +273,46 @@ sshsec.done:
 
 list:
 	@podman ps --filter "name=-web" --format "table {{.Names}}\t{{.Status}}\t{{.IPAddress}}"
+
+# ── MCP app update ─────────────────────────────────────────────────────────────
+# The MCP app (index.mjs + its node_modules) is baked into the image and copied
+# into each container's writable layer at build time. Updating therefore has two
+# independent scopes, and a full rollout needs BOTH:
+#
+#   mcpupdate-image  rebuilds the image  → ONLY containers created afterwards.
+#   mcpupdate        patches every already-running container IN PLACE.
+#
+# In-place is used (not recreate) because each container holds persistent state
+# in its writable layer — the Bearer token hash (/etc/mcp-server), the deploy
+# owner binding, certbot certificates, and /var/www/html — which a recreate from
+# a new image would discard. package.json is copied too and `npm install` is run
+# so newly added dependencies (e.g. jose for OIDC) are present before restart.
+
+mcpupdate-image: image
+	@echo "Image $(IMAGE) rebuilt. Containers created from now on use the updated app."
+	@echo "Existing containers are NOT affected — run 'make mcpupdate' for those."
+
+mcpupdate:
+	@set -e; \
+	cs="$$(podman ps --filter name=-web --format '{{.Names}}')"; \
+	test -n "$$cs" || { echo "No running -web containers found."; exit 0; }; \
+	for c in $$cs; do \
+	    echo "==> updating $$c"; \
+	    podman cp container/mcp/package.json $$c:/opt/mcp/package.json; \
+	    podman cp container/mcp/index.mjs    $$c:/opt/mcp/index.mjs; \
+	    podman exec $$c sh -c 'cd /opt/mcp && npm install --omit=dev'; \
+	    podman exec $$c systemctl restart mcp-server; \
+	    echo "    $$c updated"; \
+	done
+
+mcpupdate-one:
+	@test -n "$(CONTAINER)" || \
+	    { echo "Error: CONTAINER=<name>-web required.  Example: make mcpupdate-one CONTAINER=alice-web"; exit 1; }
+	@set -e; \
+	c="$(CONTAINER)"; \
+	echo "==> updating $$c"; \
+	podman cp container/mcp/package.json $$c:/opt/mcp/package.json; \
+	podman cp container/mcp/index.mjs    $$c:/opt/mcp/index.mjs; \
+	podman exec $$c sh -c 'cd /opt/mcp && npm install --omit=dev'; \
+	podman exec $$c systemctl restart mcp-server; \
+	echo "    $$c updated"

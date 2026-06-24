@@ -38,7 +38,7 @@ container/
   Containerfile          rockylinux:10 + systemd + nginx + Node.js 22
   nginx/nginx.conf       base nginx config (default server block removed)
   nginx/vps-mcp.conf     nginx virtual host template (server_name set by init)
-  mcp/index.mjs          MCP server (OAuth 2.1, exec_command, read_file, write_file, nginx_reload)
+  mcp/index.mjs          MCP server (OAuth 2.1, exec_command, read_file, write_file, nginx_reload, deploy_setup)
   mcp/package.json
   systemd/mcp-server.service
   systemd/vps-mcp-init.sh   first-boot init (run via podman exec)
@@ -159,11 +159,51 @@ After the container is created:
    the GitHub account whose verified primary email is `NOTIFY_EMAIL`.
 4. On a successful email match, a token-issuance notification email is sent from
    `noreply@alice.example.com` to `NOTIFY_EMAIL`.
-5. Claude.ai connects and the tools become available: `exec_command`, `read_file`, `write_file`, and `nginx_reload` (use the latter instead of reloading nginx through `exec_command`, which would interrupt the SSE connection).
+5. Claude.ai connects and the tools become available: `exec_command`, `read_file`, `write_file`, `nginx_reload` (use the latter instead of reloading nginx through `exec_command`, which would interrupt the SSE connection), and `deploy_setup` (see below).
 
 The login flow is PKCE-protected (S256): the GitHub authorization code is consumed
 immediately at the broker and never reaches Claude.ai; only a SHA-256 hash of the
 issued Bearer token is retained on disk for subsequent authentication.
+
+Each tool description carries `This connector is bound to the VPS <subdomain>.`
+so Claude can tell which host a connector targets (one container serves exactly
+one subdomain) and avoid acting on the wrong VPS.
+
+## Deploy from GitHub (Actions OIDC → PUT)
+
+`deploy_setup` returns a ready-to-commit `.github/workflows/deploy.yml` that
+uploads a repository's files to the container over HTTPS using a GitHub Actions
+**OIDC token** — no secret is stored. Files are PUT to
+`https://<subdomain>/mcp/messages/deploy/<dest>/<path>` (under the already-proxied
+`/mcp/messages` location, so no extra nginx config) and land under
+`DEPLOY_BASE_DIR` (default `/srv/deploy`; this is a landing directory, **not**
+the web root — publish it yourself if desired).
+
+The deploy endpoint accepts OIDC tokens whose `aud` is this host and whose
+`repository_owner_id` matches the GitHub account that logged in here — so any
+repo under that account can deploy, from any branch or event. The owner id is
+learned from the broker's `/mcp/resolve` response and bound at login
+(`/etc/mcp-server/deploy_owner`). Until a login binds it, `deploy_setup` still
+returns the workflow but prints a warning. The endpoint is **not** offered on the
+oauth broker container.
+
+## Updating the MCP app
+
+The MCP app (`index.mjs` + its `node_modules`) is baked into the image and copied
+into each container. A rollout has two independent scopes — run **both**:
+
+```
+make mcpupdate-image     # rebuild the image → only containers created afterwards
+make mcpupdate           # patch every running container in place (cp + npm install + restart)
+make mcpupdate-one CONTAINER=alice-web   # patch a single container
+```
+
+`mcpupdate` patches in place (not recreate) because each container holds
+persistent state in its writable layer — the Bearer token hash, the deploy-owner
+binding, certbot certificates, and `/var/www/html` — that a recreate would
+discard. When upgrading the broker and content containers together, update the
+**oauth container first** so `/mcp/resolve` returns `owner_id` before the others
+try to bind it.
 
 ## Security notes
 
