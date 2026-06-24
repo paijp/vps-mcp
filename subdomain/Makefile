@@ -15,7 +15,7 @@ sub_of    = $(word 1,$(subst __, ,$(1)))
 email_of  = $(word 2,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list mcpupdate-image mcpupdate mcpupdate-one
+.PHONY: help image install-binaries install-services list mcpupdate
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -37,10 +37,10 @@ help:
 	@printf "  make default__admin@ex.com.done    Create default container (serves parent domain)\n"
 	@printf "  make list                          List running VPS containers\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
-	@printf "  make mcpupdate-image      Rebuild the image (affects ONLY containers created later)\n"
+	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
 	@printf "  make mcpupdate            Update ALL running containers in place (cp + npm install + restart)\n"
-	@printf "  make mcpupdate-one CONTAINER=alice-web   Update a single running container\n"
-	@printf "      Run BOTH mcpupdate-image and mcpupdate to cover existing and future containers.\n\n"
+	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
+	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
 	@printf "Variables:\n"
 	@printf "  IMAGE   Container image tag (default: vps-mcp:latest)\n"
 
@@ -279,37 +279,36 @@ list:
 # into each container's writable layer at build time. Updating therefore has two
 # independent scopes, and a full rollout needs BOTH:
 #
-#   mcpupdate-image  rebuilds the image  → ONLY containers created afterwards.
-#   mcpupdate        patches every already-running container IN PLACE.
+#   make image          rebuilds the image  → ONLY containers created afterwards.
+#   make mcpupdate       patches every already-running container IN PLACE.
+#   make <sub>.mcpupdate patches one running container (e.g. make alice.mcpupdate).
 #
 # In-place is used (not recreate) because each container holds persistent state
 # in its writable layer — the Bearer token hash (/etc/mcp-server), the deploy
 # owner binding, certbot certificates, and /var/www/html — which a recreate from
 # a new image would discard. package.json is copied too and `npm install` is run
 # so newly added dependencies (e.g. jose for OIDC) are present before restart.
-
-mcpupdate-image: image
-	@echo "Image $(IMAGE) rebuilt. Containers created from now on use the updated app."
-	@echo "Existing containers are NOT affected — run 'make mcpupdate' for those."
+#
+# When upgrading the broker and content containers together, update the oauth
+# container first (make oauth.mcpupdate) so /mcp/resolve returns owner_id before
+# the others try to bind it.
 
 mcpupdate:
 	@set -e; \
 	cs="$$(podman ps --filter name=-web --format '{{.Names}}')"; \
 	test -n "$$cs" || { echo "No running -web containers found."; exit 0; }; \
 	for c in $$cs; do \
-	    echo "==> updating $$c"; \
-	    podman cp container/mcp/package.json $$c:/opt/mcp/package.json; \
-	    podman cp container/mcp/index.mjs    $$c:/opt/mcp/index.mjs; \
-	    podman exec $$c sh -c 'cd /opt/mcp && npm install --omit=dev'; \
-	    podman exec $$c systemctl restart mcp-server; \
-	    echo "    $$c updated"; \
+	    $(MAKE) --no-print-directory $${c%-web}.mcpupdate; \
 	done
 
-mcpupdate-one:
-	@test -n "$(CONTAINER)" || \
-	    { echo "Error: CONTAINER=<name>-web required.  Example: make mcpupdate-one CONTAINER=alice-web"; exit 1; }
+# Update one running container in place. Stem is the subdomain label:
+#   make alice.mcpupdate    → alice-web
+#   make oauth.mcpupdate    → oauth-web
+#   make default.mcpupdate  → default-web
+%.mcpupdate:
 	@set -e; \
-	c="$(CONTAINER)"; \
+	c="$*-web"; \
+	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
 	echo "==> updating $$c"; \
 	podman cp container/mcp/package.json $$c:/opt/mcp/package.json; \
 	podman cp container/mcp/index.mjs    $$c:/opt/mcp/index.mjs; \

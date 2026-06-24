@@ -193,9 +193,9 @@ The MCP app (`index.mjs` + its `node_modules`) is baked into the image and copie
 into each container. A rollout has two independent scopes — run **both**:
 
 ```
-make mcpupdate-image     # rebuild the image → only containers created afterwards
+make image               # rebuild the image → only containers created afterwards
 make mcpupdate           # patch every running container in place (cp + npm install + restart)
-make mcpupdate-one CONTAINER=alice-web   # patch a single container
+make alice.mcpupdate     # patch a single container (stem → <stem>-web)
 ```
 
 `mcpupdate` patches in place (not recreate) because each container holds
