@@ -33,7 +33,8 @@
  */
 
 import crypto from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { Resolver } from "node:dns/promises";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
@@ -47,6 +48,7 @@ import { z } from "zod";
 const execFileAsync = promisify(execFile);
 
 const SUBDOMAIN        = process.env.SUBDOMAIN        || "localhost";
+const HOST_IP          = process.env.IP              || "";
 const NOTIFY_EMAIL     = process.env.NOTIFY_EMAIL     || "";
 const GH_CLIENT_ID     = process.env.GITHUB_CLIENT_ID     || "";
 const GH_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || "";
@@ -72,6 +74,70 @@ const decodeState = s => JSON.parse(Buffer.from(String(s), "base64url").toString
 const isClaudeRedirect = u => {
   try { return new URL(u).hostname === "claude.ai"; } catch { return false; }
 };
+
+// ── "Hot" zones (domains this host actually answers for) ──────────────────────
+// This box runs BIND as authoritative for some zones, but a zone file can be
+// stale: e.g. a domain migrated to another host while the old zone file lingers
+// here. To advertise only domains that genuinely point at THIS host, each zone
+// is resolved through an EXTERNAL public resolver (bypassing the local BIND, so
+// the answer reflects the registrar's current delegation, not our own zone).
+//
+// Three-state, to avoid flapping on transient DNS failures:
+//   - resolves to our IP only        → hot   (advertise)
+//   - resolves with any foreign IP   → cold  (a migration moved it away)
+//   - NXDOMAIN / SERVFAIL / timeout  → keep the previous flag (no change)
+// The flags persist in ${MFN}/hot_zones.json so "keep previous" survives restarts.
+const HOT_FILE  = `${MFN}/hot_zones.json`;
+const ZONE_DIRS = ["/etc/bind/zones", "/var/named"];
+
+const extResolver = new Resolver();
+extResolver.setServers(["8.8.8.8", "1.1.1.1"]);
+
+// domain -> boolean (hot). Loaded once, refreshed periodically.
+let hotZones = (() => {
+  try { return JSON.parse(readFileSync(HOT_FILE, "utf8")); } catch { return {}; }
+})();
+
+function zoneDomains() {
+  for (const dir of ZONE_DIRS) {
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      return readdirSync(dir)
+        .filter(f => f.endsWith(".zone"))
+        .map(f => f.slice(0, -5));
+    } catch { /* try next dir */ }
+  }
+  return [];
+}
+
+async function refreshHotZones() {
+  if (!HOST_IP) return;                       // nothing to compare against
+  const next = {};
+  for (const domain of zoneDomains()) {
+    let addrs = null;
+    try { addrs = await extResolver.resolve4(domain); }
+    catch { /* NXDOMAIN / SERVFAIL / timeout */ }
+    if (addrs && addrs.length) {
+      // hot only when EVERY answer is our IP — any foreign address means the
+      // domain has been (partly) moved elsewhere, so we stop advertising it.
+      next[domain] = addrs.every(a => a === HOST_IP);
+    } else if (domain in hotZones) {
+      next[domain] = hotZones[domain];        // resolution failed → keep previous
+    }
+    // else: unknown domain, first-ever lookup failed → leave it out (cold)
+  }
+  hotZones = next;
+  try { writeFileSync(HOT_FILE, JSON.stringify(hotZones)); } catch { /* best effort */ }
+}
+
+// Line appended to tool descriptions so Claude can tell which host (and which
+// domains) this connector is bound to — guarding against acting on the wrong VPS.
+function hostInfoLine() {
+  const hot = Object.keys(hotZones).filter(d => hotZones[d]).sort();
+  const ip  = HOST_IP ? ` (IP ${HOST_IP})` : "";
+  const dom = hot.length ? ` Domains served here: ${hot.join(", ")}.` : "";
+  return `\nThis connector is bound to the VPS ${SUBDOMAIN}${ip}.${dom}`;
+}
 
 // External base URL of this host, derived from the proxied request headers so
 // it works regardless of the configured domain.
@@ -394,7 +460,8 @@ function createMcpServer() {
 
   mcp.tool(
     "exec_command",
-    `Execute a shell command on the VPS (${SUBDOMAIN}). Returns stdout and stderr.`,
+    `Execute a shell command on the VPS (${SUBDOMAIN}). Returns stdout and stderr.` +
+      hostInfoLine(),
     { command: z.string().describe("Shell command to run") },
     async ({ command }) => {
       try {
@@ -632,3 +699,9 @@ app.post("/mcp/messages", auth, async (req, res) => {
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`vps-mcp listening on 127.0.0.1:${PORT} (subdomain=${SUBDOMAIN})`);
 });
+
+// Determine which zones are "hot" now and re-check periodically. A fresh
+// McpServer (and thus a fresh tool description via hostInfoLine) is built per
+// SSE connection, so each new connection picks up the latest result.
+refreshHotZones().catch(() => {});
+setInterval(() => { refreshHotZones().catch(() => {}); }, 10 * 60_000).unref();
