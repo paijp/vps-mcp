@@ -15,7 +15,7 @@ word2_of = $(word 2,$(subst __, ,$(1)))
 word3_of = $(word 3,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help update
+.PHONY: help mcpupdate
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -32,10 +32,10 @@ help:
 	@printf "  make oauth.done\n"
 	@printf "      Applies the credentials (restarts mcp-server).\n\n"
 	@printf "Update an already-set-up host (after git pull):\n"
-	@printf "  make update\n"
-	@printf "      Reinstalls /opt/mcp (index.mjs, package.json+deps), the\n"
-	@printf "      systemd unit, /srv/deploy, and restarts mcp-server. Does not\n"
-	@printf "      touch the nginx config (certbot manages TLS there).\n\n"
+	@printf "  make mcpupdate\n"
+	@printf "      Stops mcp-server, reinstalls /opt/mcp (index.mjs,\n"
+	@printf "      package.json+deps), the systemd unit and /srv/deploy, then\n"
+	@printf "      restarts it. Does not touch the nginx config (certbot owns TLS).\n\n"
 	@printf "Variables (auto-read from /etc/vps-mcp/host.env after setupdone):\n"
 	@printf "  DOMAIN  IP  EMAIL\n"
 
@@ -192,15 +192,10 @@ help:
 	nginx -t && systemctl reload nginx
 
 	# ── MCP server (Node.js) ─────────────────────────────────────────────────
+	# Install/refresh the MCP app via the shared mcpupdate target (same logic
+	# used to update an already-set-up host).
 	mkdir -p /opt/mcp
-	install -m 644 mcp/index.mjs    /opt/mcp/index.mjs
-	install -m 644 mcp/package.json /opt/mcp/package.json
-	cd /opt/mcp && npm install --omit=dev
-	install -m 644 systemd/mcp-server.service /etc/systemd/system/
-	systemctl daemon-reload
-
-	# ── deploy target dir (GitHub Actions OIDC → PUT /deploy) ─────────────────
-	mkdir -p /srv/deploy
+	$(MAKE) --no-print-directory mcpupdate
 
 	# ── MCP credentials ──────────────────────────────────────────────────────
 	# The Bearer token is minted dynamically after a successful GitHub login;
@@ -231,11 +226,11 @@ help:
 	    sleep 60; \
 	done
 
-	# ── start MCP server ─────────────────────────────────────────────────────
-	# Starts now; GitHub login (and the only notification email) happens later,
-	# once oauth.env is filled in and `make oauth.done` is run. No email is sent
-	# at setup time — the sole notification fires at token issuance.
-	systemctl enable --now mcp-server
+	# ── enable MCP server on boot ────────────────────────────────────────────
+	# mcpupdate above already started it; just enable boot start. GitHub login
+	# (and the only notification email) happens later, once oauth.env is filled
+	# in and `make oauth.done` is run. No email is sent at setup time.
+	systemctl enable mcp-server
 
 	@touch $@
 	@printf "\nSetup complete: https://$(_DOMAIN)/mcp/sse\n"
@@ -265,12 +260,17 @@ oauth.done: /etc/vps-mcp/oauth.env
 	@touch $@
 	@printf "OAuth applied. Connect via https://$(DOMAIN)/mcp/sse and log in with GitHub.\n"
 
-# ── update MCP server code (git pull && make update) ──────────────────────────
+# ── update MCP server code (git pull && make mcpupdate) ───────────────────────
 # Refresh the MCP app from this checkout without re-running full host setup.
+# Also invoked by %.setupdone so initial install and update share one path.
+# The service is stopped first: with Restart=on-failure, a crash mid-update
+# could otherwise auto-restart on half-written files / a partial npm install.
 # Does NOT touch the nginx config: certbot rewrites TLS lines in the live conf,
 # so overwriting it would revert HTTPS. If full/nginx/vps-mcp.conf changed,
 # merge it into the live conf manually.
-update:
+mcpupdate:
+	-systemctl stop mcp-server
+	mkdir -p /opt/mcp
 	install -m 644 mcp/index.mjs    /opt/mcp/index.mjs
 	install -m 644 mcp/package.json /opt/mcp/package.json
 	cd /opt/mcp && npm install --omit=dev
@@ -278,6 +278,6 @@ update:
 	mkdir -p /srv/deploy
 	systemctl daemon-reload
 	systemctl restart mcp-server
-	@printf "Updated /opt/mcp and restarted mcp-server.\n"
+	@printf "mcpupdate: /opt/mcp refreshed and mcp-server restarted.\n"
 	@printf "Note: nginx config not touched. If full/nginx/vps-mcp.conf changed,\n"
 	@printf "merge it into the live /etc/nginx conf manually (certbot owns TLS lines).\n"
