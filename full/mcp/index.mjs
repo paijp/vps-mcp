@@ -75,8 +75,8 @@ const isClaudeRedirect = u => {
 // the answer reflects the registrar's current delegation, not our own zone).
 //
 // Three-state, to avoid flapping on transient DNS failures:
-//   - resolves to our IP only        → hot   (advertise)
-//   - resolves with any foreign IP   → cold  (a migration moved it away)
+//   - our IP is among the answers    → hot   (advertise)
+//   - resolves, but our IP absent    → cold  (a migration moved it away)
 //   - NXDOMAIN / SERVFAIL / timeout  → keep the previous flag (no change)
 // The flags persist in ${MFN}/hot_zones.json so "keep previous" survives restarts.
 const HOT_FILE  = `${MFN}/hot_zones.json`;
@@ -110,9 +110,11 @@ async function refreshHotZones() {
     try { addrs = await extResolver.resolve4(domain); }
     catch { /* NXDOMAIN / SERVFAIL / timeout */ }
     if (addrs && addrs.length) {
-      // hot only when EVERY answer is our IP — any foreign address means the
-      // domain has been (partly) moved elsewhere, so we stop advertising it.
-      next[domain] = addrs.every(a => a === HOST_IP);
+      // hot when our IP is among the answers — this host is a valid endpoint
+      // for the domain. A fully migrated domain resolves to foreign IPs only
+      // (our IP absent) → cold. During a brief new/old overlap it stays hot,
+      // which is correct because this host is still serving it then.
+      next[domain] = addrs.includes(HOST_IP);
     } else if (domain in hotZones) {
       next[domain] = hotZones[domain];        // resolution failed → keep previous
     }
