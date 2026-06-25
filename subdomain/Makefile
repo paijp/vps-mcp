@@ -38,7 +38,7 @@ help:
 	@printf "  make list                          List running VPS containers\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
-	@printf "  make mcpupdate            Update ALL running containers in place (cp + npm install + restart)\n"
+	@printf "  make mcpupdate            Update ALL running containers in place (stop + cp + npm install + start)\n"
 	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
 	@printf "Variables:\n"
@@ -310,8 +310,9 @@ mcpupdate:
 	c="$*-web"; \
 	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
 	echo "==> updating $$c"; \
+	podman exec $$c systemctl stop mcp-server; \
 	podman cp container/mcp/package.json $$c:/opt/mcp/package.json; \
 	podman cp container/mcp/index.mjs    $$c:/opt/mcp/index.mjs; \
 	podman exec $$c sh -c 'cd /opt/mcp && npm install --omit=dev'; \
-	podman exec $$c systemctl restart mcp-server; \
+	podman exec $$c systemctl start mcp-server; \
 	echo "    $$c updated"
