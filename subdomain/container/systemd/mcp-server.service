@@ -10,10 +10,14 @@ ExecStart=/usr/bin/node /opt/mcp/index.mjs
 Restart=on-failure
 RestartSec=5
 
-# Harden: no new privileges, private /tmp, read-only /usr.
+# Hardening note: ProtectSystem is intentionally NOT set. By design the MCP
+# connector grants full root access (exec_command runs as root) and the server
+# writes secrets under /etc/mcp-server (hash, token, deploy_owner), so a
+# read-only /etc would be contrary to the design. It was also a no-op here:
+# this container's systemd cannot apply the mount-namespace sandbox under
+# podman, so ProtectSystem=full silently had no effect anyway.
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target
