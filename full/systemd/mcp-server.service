@@ -13,10 +13,13 @@ ExecStart=/usr/bin/node /opt/mcp/index.mjs
 Restart=on-failure
 RestartSec=5
 
+# Hardening note: ProtectSystem is intentionally NOT set. By design the MCP
+# connector grants full root access (exec_command runs as root) and the server
+# writes secrets under /etc/mcp-server (hash, token, deploy_owner) plus files
+# under /srv/deploy, so a read-only /etc would only get in the way. (Without
+# ProtectSystem, ReadWritePaths would be a no-op, so it is dropped too.)
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=full
-ReadWritePaths=/etc/mcp-server /srv/deploy
 
 [Install]
 WantedBy=multi-user.target
