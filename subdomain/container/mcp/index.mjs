@@ -14,7 +14,10 @@
  *   - /mcp/token      receives { code (ignored), code_verifier }, asks the oauth
  *                     container to resolve the verified GitHub email, and issues
  *                     a Bearer only if that email matches NOTIFY_EMAIL
- *   - /mcp/sse        SSE transport (Bearer auth)
+ *   - /mcp/sse        GET: legacy SSE transport / POST: Streamable HTTP
+ *                     transport (both Bearer auth). Claude.ai tries POST
+ *                     (Streamable HTTP) first and only sometimes falls back
+ *                     to SSE, so both must be served on the same URL.
  *   - /mcp/messages   SSE message channel (Bearer auth)
  *   - PUT /mcp/messages/deploy/*  GitHub Actions OIDC → file PUT under
  *                     DEPLOY_BASE_DIR (owner bound at login; not on the oauth
@@ -49,6 +52,7 @@ import express from "express";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
@@ -664,7 +668,24 @@ function createMcpServer() {
   return mcp;
 }
 
-// ── SSE transport ─────────────────────────────────────────────────────────────
+// ── Streamable HTTP transport ─────────────────────────────────────────────────
+// Claude.ai probes the connector URL with a POST (Streamable HTTP) before
+// falling back to legacy SSE; when this returned 404 the fallback did not
+// always happen and the connector stayed unusable. Stateless mode: a fresh
+// server+transport pair per request, no session tracking needed.
+
+app.post("/mcp/sse", auth, async (req, res) => {
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const mcp = createMcpServer();
+  res.on("close", () => {
+    transport.close();
+    mcp.close();
+  });
+  await mcp.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+});
+
+// ── SSE transport (legacy) ────────────────────────────────────────────────────
 
 const transports = new Map();
 
