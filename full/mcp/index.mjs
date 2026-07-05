@@ -43,6 +43,7 @@ import express from "express";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
@@ -679,7 +680,24 @@ function createMcpServer() {
   return mcp;
 }
 
-// ── SSE transport ─────────────────────────────────────────────────────────────
+// ── Streamable HTTP transport ─────────────────────────────────────────────────
+// Claude.ai probes the connector URL with a POST (Streamable HTTP) before
+// falling back to legacy SSE; when this returned 404 the fallback did not
+// always happen and the connector stayed unusable. Stateless mode: a fresh
+// server+transport pair per request, no session tracking needed.
+
+app.post("/mcp/sse", auth, async (req, res) => {
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const mcp = createMcpServer();
+  res.on("close", () => {
+    transport.close();
+    mcp.close();
+  });
+  await mcp.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+});
+
+// ── SSE transport (legacy) ────────────────────────────────────────────────────
 
 const transports = new Map();
 
