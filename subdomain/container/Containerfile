@@ -34,7 +34,20 @@ RUN systemctl mask \
 # dnf-automatic-install always applies updates (no config needed).
 # The container itself never reboots — the host's weekly vps-mcp-reboot.timer
 # plus --restart=always refreshes running containers.
-RUN systemctl enable dnf-automatic-install.timer
+#
+# dnf runs are memory-hungry (hundreds of MB) and every container has its own
+# timer, so on a small host simultaneous runs across containers can swap-thrash
+# the whole machine to death (observed: CPU + disk I/O pinned at 100%, SSH
+# unresponsive). Two mitigations:
+#   - mask dnf-makecache.timer: the periodic metadata refresh is pure overhead
+#     here; dnf-automatic fetches the metadata it needs when it runs.
+#   - RandomizedDelaySec spreads dnf-automatic-install firings across
+#     containers so they don't all run at the same minute.
+RUN systemctl enable dnf-automatic-install.timer \
+    && systemctl mask dnf-makecache.timer \
+    && mkdir -p /etc/systemd/system/dnf-automatic-install.timer.d \
+    && printf '[Timer]\nRandomizedDelaySec=4h\n' \
+       > /etc/systemd/system/dnf-automatic-install.timer.d/spread.conf
 
 # ── Self-signed certificate (replaced by certbot on first boot) ───────────────
 RUN mkdir -p /etc/nginx/ssl \

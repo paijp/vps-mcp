@@ -58,6 +58,20 @@ Makefile
 - Go 1.21+
 - `make`
 
+### Server sizing
+
+Each container runs systemd, nginx, Postfix and a Node.js MCP server — roughly
+**110–130 MB of RAM per container** at idle, plus 200–300 MB for the host
+(kernel, podman, BIND, opendkim, postfix). Periodic `dnf` runs inside the
+containers spike by several hundred MB each. Rough guide: 1 GB / 1 core for up
+to ~3 containers, **2 GB / 2–3 cores for up to ~8**, 4 GB+ beyond that.
+
+An undersized host swap-thrashes when dnf timers fire (CPU and disk I/O pinned
+at 100%, SSH unresponsive). Setup mitigates this — zram swap, persistent
+journal, `dnf-makecache.timer` disabled on the host and in the image, and
+container `dnf-automatic-install` firings spread with `RandomizedDelaySec` —
+but mitigation is no substitute for enough RAM.
+
 ## Installation
 
 Run once as root on the host, substituting the server's public IP and base domain:
@@ -74,6 +88,7 @@ This:
 5. Builds the container image (`vps-mcp:latest`) and the Go proxy binaries (`list-containers`, `vps-proxy`, `vps-proxy-http` in `/usr/local/sbin`)
 6. Installs the proxy socket/service units (`vps-proxy{80,443}`) and nftables rules, then enables + starts them
 7. Enables unattended security updates (`dnf-automatic`) and a weekly reboot (`vps-mcp-reboot.timer`, Sunday ~04:00); `podman-restart.service` brings `--restart=always` containers back up after each reboot
+8. Hardens the host against memory pressure: enables zram swap and a persistent journal, and disables the host's `dnf-makecache.timer` (see [Server sizing](#server-sizing))
 
 After setup, the domain and IP are read from `/etc/vps-mcp/host.env` automatically — no need to pass `DOMAIN=` for subsequent commands.
 

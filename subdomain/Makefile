@@ -136,7 +136,24 @@ help:
 	elif command -v dnf >/dev/null 2>&1; then \
 	    install -m 644 host/dnf/automatic.conf /etc/dnf/automatic.conf; \
 	    systemctl enable --now dnf-automatic.timer; \
+	    systemctl disable --now dnf-makecache.timer 2>/dev/null || true; \
 	fi
+	# Persistent journal: without /var/log/journal the host journal lives in
+	# tmpfs and is lost on reboot, making incidents (OOM, swap thrash)
+	# undiagnosable after the fact.
+	mkdir -p /var/log/journal
+	systemctl restart systemd-journald
+	# zram swap: dnf runs in every container are memory-hungry; on a small host
+	# they can push the machine into disk-swap thrash (CPU + I/O pinned, SSH
+	# dead). Compressed in-RAM swap absorbs those spikes far more gracefully.
+	if command -v apt-get >/dev/null 2>&1; then \
+	    apt-get install -y systemd-zram-generator || true; \
+	elif command -v dnf >/dev/null 2>&1; then \
+	    dnf install -y zram-generator || true; \
+	fi
+	printf '[zram0]\nzram-size = ram / 2\n' > /etc/systemd/zram-generator.conf
+	systemctl daemon-reload
+	systemctl start systemd-zram-setup@zram0.service 2>/dev/null || true
 	install -m 644 host/systemd/vps-mcp-reboot.service /etc/systemd/system/
 	install -m 644 host/systemd/vps-mcp-reboot.timer   /etc/systemd/system/
 	systemctl daemon-reload
