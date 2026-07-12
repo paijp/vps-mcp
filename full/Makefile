@@ -24,7 +24,8 @@ help:
 	@printf "Setup (run once as root):\n"
 	@printf "  make 203.0.113.1__example.com__admin@example.com.setupdone\n"
 	@printf "      Swapfile, BIND wildcard DNS, nginx, Node.js 22, MCP server,\n"
-	@printf "      certbot (waits for DNS propagation), firewall, auto-updates.\n"
+	@printf "      certbot (waits for DNS propagation), firewall, auto-updates,\n"
+	@printf "      memory-pressure hardening (zram, persistent journal).\n"
 	@printf "      Also writes an /etc/vps-mcp/oauth.env template.\n\n"
 	@printf "  Then fill GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET in\n"
 	@printf "  /etc/vps-mcp/oauth.env (GitHub OAuth App callback\n"
@@ -151,7 +152,25 @@ help:
 	elif command -v dnf >/dev/null 2>&1; then \
 	    install -m 644 host/dnf/automatic.conf /etc/dnf/automatic.conf; \
 	    systemctl enable --now dnf-automatic.timer; \
+	    systemctl disable --now dnf-makecache.timer 2>/dev/null || true; \
 	fi
+	# Persistent journal: without /var/log/journal the host journal lives in
+	# tmpfs and is lost on reboot, making incidents (OOM, swap thrash)
+	# undiagnosable after the fact.
+	mkdir -p /var/log/journal
+	systemctl restart systemd-journald
+	# zram swap: dnf-automatic and Node.js are memory-hungry; on a small host
+	# they can push the machine into disk-swap thrash (CPU + I/O pinned, SSH
+	# dead). Compressed in-RAM swap absorbs those spikes far more gracefully than
+	# the on-disk /swapfile above.
+	if command -v apt-get >/dev/null 2>&1; then \
+	    apt-get install -y systemd-zram-generator || true; \
+	elif command -v dnf >/dev/null 2>&1; then \
+	    dnf install -y zram-generator || true; \
+	fi
+	printf '[zram0]\nzram-size = ram / 2\n' > /etc/systemd/zram-generator.conf
+	systemctl daemon-reload
+	systemctl start systemd-zram-setup@zram0.service 2>/dev/null || true
 	install -m 644 host/systemd/vps-mcp-reboot.service /etc/systemd/system/
 	install -m 644 host/systemd/vps-mcp-reboot.timer   /etc/systemd/system/
 	systemctl daemon-reload

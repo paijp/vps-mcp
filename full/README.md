@@ -54,8 +54,11 @@ make 203.0.113.1__example.com__admin@example.com.setupdone
 
 Stem format is `IP__DOMAIN__EMAIL`. This builds: swapfile, BIND wildcard DNS, nginx,
 Node.js 22, the MCP server, certbot (waits for DNS propagation), firewall, OpenDKIM/Postfix,
-and auto-updates. It also writes an `/etc/vps-mcp/oauth.env` template (mode 600). The MCP
-server starts, but GitHub login will not work until credentials are filled in.
+and auto-updates. It also hardens the host against memory pressure — enabling zram swap and
+a persistent journal, and disabling `dnf-makecache.timer` (dnf-automatic fetches metadata
+when it runs) — so `dnf`/Node.js spikes don't swap-thrash a small VPS. It also writes an
+`/etc/vps-mcp/oauth.env` template (mode 600). The MCP server starts, but GitHub login will
+not work until credentials are filled in.
 
 No email is sent at this stage.
 
