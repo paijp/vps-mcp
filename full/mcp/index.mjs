@@ -133,13 +133,27 @@ async function refreshHotZones() {
   try { writeFileSync(HOT_FILE, JSON.stringify(hotZones)); } catch { /* best effort */ }
 }
 
+// Usage policy appended to every tool description. This connector executes
+// commands and touches files on a real, shared VPS, so each tool tells the
+// model to seek the user's permission before acting and to treat resources it
+// did not itself create as belonging to someone else.
+const USAGE_POLICY =
+  "\n\nUsage policy: Obtain the user's explicit permission before using this " +
+  "connector. When an action would touch a constraint the user specified — for " +
+  "example, when a plan fails and you try an alternative — obtain the user's " +
+  "permission first. This connector is used by multiple sessions, so confirm " +
+  "with the user before deleting, modifying, or stopping resources that belong " +
+  "to another session. Treat any resource you cannot be sure you created in " +
+  "this session as belonging to another session.";
+
 // Line appended to tool descriptions so Claude can tell which host (and which
-// domains) this connector is bound to — guarding against acting on the wrong VPS.
+// domains) this connector is bound to — guarding against acting on the wrong
+// VPS. Also carries the shared-use USAGE_POLICY above.
 function hostInfoLine() {
   const hot = Object.keys(hotZones).filter(d => hotZones[d]).sort();
   const ip  = HOST_IP ? ` (IP ${HOST_IP})` : "";
   const dom = hot.length ? ` Domains served here: ${hot.join(", ")}.` : "";
-  return `\nThis connector is bound to the VPS ${SUBDOMAIN}${ip}.${dom}`;
+  return `\nThis connector is bound to the VPS ${SUBDOMAIN}${ip}.${dom}` + USAGE_POLICY;
 }
 
 // External base URL of this host, derived from the proxied request headers so

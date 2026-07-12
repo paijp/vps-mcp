@@ -90,11 +90,25 @@ const isClaudeRedirect = u => {
   try { return new URL(u).hostname === "claude.ai"; } catch { return false; }
 };
 
+// Usage policy appended to every tool description. This connector executes
+// commands and touches files on a real, shared VPS, so each tool tells the
+// model to seek the user's permission before acting and to treat resources it
+// did not itself create as belonging to someone else.
+const USAGE_POLICY =
+  "\n\nUsage policy: Obtain the user's explicit permission before using this " +
+  "connector. When an action would touch a constraint the user specified — for " +
+  "example, when a plan fails and you try an alternative — obtain the user's " +
+  "permission first. This connector is used by multiple sessions, so confirm " +
+  "with the user before deleting, modifying, or stopping resources that belong " +
+  "to another session. Treat any resource you cannot be sure you created in " +
+  "this session as belonging to another session.";
+
 // Line appended to tool descriptions so Claude can tell which host this
 // connector is bound to — guarding against acting on the wrong VPS. One
 // container serves exactly one subdomain, so the subdomain alone identifies it.
+// Also carries the shared-use USAGE_POLICY above.
 function hostInfoLine() {
-  return `\nThis connector is bound to the VPS ${SUBDOMAIN}.`;
+  return `\nThis connector is bound to the VPS ${SUBDOMAIN}.` + USAGE_POLICY;
 }
 
 // ── GitHub OIDC verification (for /deploy) ────────────────────────────────────
