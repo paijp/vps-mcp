@@ -515,7 +515,11 @@ function createMcpServer() {
 
   mcp.tool(
     "write_file",
-    `Write content to a file on the VPS (${SUBDOMAIN}) filesystem.` +
+    `Write content to a file on the VPS (${SUBDOMAIN}) filesystem. ` +
+      "If the same content will also live in a GitHub repository, prefer " +
+      "committing to GitHub and deploying via GitHub Actions unless the user " +
+      "asks otherwise — writing large files directly through this tool costs " +
+      "more tokens, takes longer, and fails more often." +
       hostInfoLine(),
     {
       path:    z.string().describe("Absolute path to the file"),
