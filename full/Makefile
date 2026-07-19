@@ -15,7 +15,7 @@ word2_of = $(word 2,$(subst __, ,$(1)))
 word3_of = $(word 3,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help mcpupdate
+.PHONY: help mcpupdate check
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -37,6 +37,13 @@ help:
 	@printf "      Stops mcp-server, reinstalls /opt/mcp (index.mjs,\n"
 	@printf "      package.json+deps), the systemd unit and /srv/deploy, then\n"
 	@printf "      restarts it. Does not touch the nginx config (certbot owns TLS).\n\n"
+	@printf "Check installed files against this checkout:\n"
+	@printf "  make check\n"
+	@printf "      Diffs the installed copies of the MCP app, systemd units,\n"
+	@printf "      opendkim/BIND/dnf-automatic configs, and nginx/vps-mcp.conf\n"
+	@printf "      against the repo (replaying template substitutions). Highlights\n"
+	@printf "      drift in files that mcpupdate does NOT refresh — most notably\n"
+	@printf "      nginx/vps-mcp.conf, which needs a manual merge after edits.\n\n"
 	@printf "Variables (auto-read from /etc/vps-mcp/host.env after setupdone):\n"
 	@printf "  DOMAIN  IP  EMAIL\n"
 
@@ -300,3 +307,12 @@ mcpupdate:
 	@printf "mcpupdate: /opt/mcp refreshed and mcp-server restarted.\n"
 	@printf "Note: nginx config not touched. If full/nginx/vps-mcp.conf changed,\n"
 	@printf "merge it into the live /etc/nginx conf manually (certbot owns TLS lines).\n"
+
+# ── check installed files vs this checkout ───────────────────────────────────
+# Reports OK / DIFFER / MISSING for every file the Makefile installs, replaying
+# template substitutions (DOMAIN, BIND paths) so the comparison is meaningful.
+# Especially useful for configs that no update target refreshes automatically —
+# nginx/vps-mcp.conf, opendkim.conf, BIND zone/config, systemd units — so a
+# `git pull` doesn't silently leave the live host on an old copy.
+check:
+	@sh scripts/check-installed.sh

@@ -15,7 +15,7 @@ sub_of    = $(word 1,$(subst __, ,$(1)))
 email_of  = $(word 2,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list mcpupdate
+.PHONY: help image install-binaries install-services list mcpupdate check
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -41,6 +41,13 @@ help:
 	@printf "  make mcpupdate            Update ALL running containers in place (stop + cp + npm install + start)\n"
 	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
+	@printf "Check installed files against this checkout:\n"
+	@printf "  make check\n"
+	@printf "      Diffs installed proxy units, nftables, BIND/opendkim/dnf-automatic\n"
+	@printf "      configs, and (if built) the container image's MCP app against the\n"
+	@printf "      repo (replaying template substitutions). Highlights drift in files\n"
+	@printf "      no update target refreshes automatically — re-run setupdone /\n"
+	@printf "      install-services / image to bring them back in sync.\n\n"
 	@printf "Variables:\n"
 	@printf "  IMAGE   Container image tag (default: vps-mcp:latest)\n"
 
@@ -317,6 +324,16 @@ mcpupdate:
 	for c in $$cs; do \
 	    $(MAKE) --no-print-directory $${c%-web}.mcpupdate; \
 	done
+
+# ── check installed files vs this checkout ───────────────────────────────────
+# Reports OK / DIFFER / MISSING for every host-side file the Makefile installs,
+# plus the image-baked MCP app if podman + the image are present. Replays
+# template substitutions (DOMAIN, BIND paths, proxy UIDs) so the comparison is
+# meaningful. Especially useful for configs no update target refreshes — proxy
+# units, nftables, opendkim, BIND — so a `git pull` doesn't silently leave the
+# live host on an old copy.
+check:
+	@sh scripts/check-installed.sh
 
 # Update one running container in place. Stem is the subdomain label:
 #   make alice.mcpupdate    → alice-web
