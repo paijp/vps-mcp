@@ -47,7 +47,11 @@ help:
 	@printf "      configs, and (if built) the container image's MCP app against the\n"
 	@printf "      repo (replaying template substitutions). Highlights drift in files\n"
 	@printf "      no update target refreshes automatically — re-run setupdone /\n"
-	@printf "      install-services / image to bring them back in sync.\n\n"
+	@printf "      install-services / image to bring them back in sync.\n"
+	@printf "      Also inspects every running <name>-web container: diffs the baked\n"
+	@printf "      nginx/systemd/init files that 'mcpupdate' does NOT refresh and runs\n"
+	@printf "      'nginx -t' inside each, so a stale or unloadable container config\n"
+	@printf "      is caught (rebuild with 'make image' + recreate the container).\n\n"
 	@printf "Variables:\n"
 	@printf "  IMAGE   Container image tag (default: vps-mcp:latest)\n"
 
@@ -331,7 +335,9 @@ mcpupdate:
 # template substitutions (DOMAIN, BIND paths, proxy UIDs) so the comparison is
 # meaningful. Especially useful for configs no update target refreshes — proxy
 # units, nftables, opendkim, BIND — so a `git pull` doesn't silently leave the
-# live host on an old copy.
+# live host on an old copy. Then, for every running <name>-web container, diffs
+# the baked nginx/systemd/init files (which `mcpupdate` never refreshes) and
+# runs `nginx -t` inside the container to catch a config it cannot load.
 check:
 	@sh scripts/check-installed.sh
 

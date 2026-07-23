@@ -64,6 +64,53 @@ check_pair() {
     rm -f "$exp"
 }
 
+# render_vhost SRC — replay vps-mcp-init.sh's server_name substitution for the
+# container currently being checked ($sub is set by the caller from the
+# container's /etc/vps-mcp-env).
+render_vhost() { sed "s/server_name _;/server_name $sub;/g" "$1"; }
+
+# norm_cert — canonicalise the ssl_certificate / ssl_certificate_key directive
+# lines (read on stdin). vps-mcp-init.sh rewrites them to the Let's Encrypt live
+# path on success, or leaves the image's self-signed default if certbot failed;
+# both are legitimate, so the actual path must not read as drift.
+norm_cert() {
+    sed -E -e 's|^([[:space:]]*ssl_certificate_key)[[:space:]].*|\1 __KEY__;|' \
+           -e 's|^([[:space:]]*ssl_certificate)[[:space:]].*|\1 __CERT__;|'
+}
+
+# check_in_container CONTAINER SRC DST [render] [normalize]
+#   Compare a file inside a running container against the repo copy.
+#     render     optional cmd (given the SRC path) that replays install-time
+#                edits; defaults to plain `cat`.
+#     normalize  optional filter (reads stdin) applied to BOTH the expected and
+#                the actual content before comparison, to mask lines that
+#                legitimately vary at runtime; defaults to `cat`.
+check_in_container() {
+    c=$1; src=$2; dst=$3; render=${4:-cat}; normalize=${5:-cat}
+    if [ ! -e "$src" ]; then
+        echo "SKIP     $c:$dst  (repo source $src missing)"
+        return
+    fi
+    actual="$tmp/actual"
+    if ! podman exec "$c" cat "$dst" > "$actual" 2>/dev/null; then
+        echo "MISSING  $c:$dst  (source: $src)"
+        status=1
+        return
+    fi
+    exp="$tmp/exp"
+    # shellcheck disable=SC2086
+    eval "$render \"\$src\"" | $normalize > "$exp"
+    # shellcheck disable=SC2086
+    $normalize < "$actual" > "$actual.norm"
+    if cmp -s "$exp" "$actual.norm"; then
+        echo "OK       $c:$dst"
+    else
+        echo "DIFFER   $c:$dst  (source: $src)"
+        diff -u "$exp" "$actual.norm" | sed 's/^/    /' | head -n 40
+        status=1
+    fi
+}
+
 # ── proxy sockets/services (install-services) ────────────────────────────────
 check_pair host/systemd/vps-proxy443.socket   /etc/systemd/system/vps-proxy443.socket
 check_pair host/systemd/vps-proxy443.service  /etc/systemd/system/vps-proxy443.service
@@ -126,6 +173,42 @@ if command -v podman >/dev/null 2>&1 && podman image exists "${IMAGE:-vps-mcp:la
                 echo "DIFFER   image:${IMAGE:-vps-mcp:latest}:/opt/mcp/$base  (source: $f) — run 'make image' to rebuild"
                 status=1
             fi
+        fi
+    done
+fi
+
+# ── in-container files + nginx syntax (per running container) ─────────────────
+# `make mcpupdate` only replaces /opt/mcp/{index.mjs,package.json} inside each
+# container; the nginx config, systemd unit and init/deploy scripts keep
+# whatever the image shipped when the container was created. A container built
+# from an old image therefore runs stale files that no host-side check reveals.
+# For every running <name>-web container we diff those baked files against the
+# repo and, crucially, run `nginx -t` inside the container — the direct guard
+# against a container whose nginx cannot load its config (e.g. a duplicate
+# directive that keeps nginx down while the rest of the container looks healthy).
+if command -v podman >/dev/null 2>&1; then
+    for c in $(podman ps --filter name=-web --format '{{.Names}}' 2>/dev/null); do
+        echo "---- container: $c ----"
+        # SUBDOMAIN drives the server_name substitution vps-mcp-init.sh applied.
+        sub=$(podman exec "$c" sed -n 's/^SUBDOMAIN=//p' /etc/vps-mcp-env 2>/dev/null)
+        [ -n "$sub" ] || echo "NOTE     $c: SUBDOMAIN unknown (/etc/vps-mcp-env unreadable); server_name diff may be noisy"
+
+        check_in_container "$c" container/mcp/index.mjs             /opt/mcp/index.mjs
+        check_in_container "$c" container/mcp/package.json          /opt/mcp/package.json
+        check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
+        check_in_container "$c" container/systemd/vps-mcp-init.sh   /usr/local/bin/vps-mcp-init.sh
+        check_in_container "$c" container/systemd/certbot-deploy.sh /usr/local/bin/certbot-deploy.sh
+        check_in_container "$c" container/nginx/nginx.conf          /etc/nginx/nginx.conf
+        # vps-mcp.conf: replay the server_name substitution and normalise the
+        # ssl_certificate* lines on both sides (see render_vhost / norm_cert).
+        check_in_container "$c" container/nginx/vps-mcp.conf        /etc/nginx/conf.d/vps-mcp.conf render_vhost norm_cert
+
+        if podman exec "$c" nginx -t >"$tmp/nginx-t" 2>&1; then
+            echo "OK       $c: nginx -t (configuration valid)"
+        else
+            echo "FAIL     $c: nginx -t (configuration invalid)"
+            sed 's/^/    /' "$tmp/nginx-t"
+            status=1
         fi
     done
 fi

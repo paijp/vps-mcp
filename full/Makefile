@@ -43,7 +43,9 @@ help:
 	@printf "      opendkim/BIND/dnf-automatic configs, and nginx/vps-mcp.conf\n"
 	@printf "      against the repo (replaying template substitutions). Highlights\n"
 	@printf "      drift in files that mcpupdate does NOT refresh — most notably\n"
-	@printf "      nginx/vps-mcp.conf, which needs a manual merge after edits.\n\n"
+	@printf "      nginx/vps-mcp.conf, which needs a manual merge after edits.\n"
+	@printf "      Finally runs 'nginx -t' so a broken live config (e.g. a\n"
+	@printf "      duplicate directive) surfaces here, not at the next reload.\n\n"
 	@printf "Variables (auto-read from /etc/vps-mcp/host.env after setupdone):\n"
 	@printf "  DOMAIN  IP  EMAIL\n"
 

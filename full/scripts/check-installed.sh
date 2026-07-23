@@ -104,4 +104,23 @@ fi
 echo "---- nginx (certbot manages TLS lines; diff below is expected to be noisy) ----"
 check_pair nginx/vps-mcp.conf                   "$_nginx_dst"                     subst_domain
 
+# ── nginx syntax check (live config) ─────────────────────────────────────────
+# A content diff can't tell whether the assembled config actually parses: a
+# stray or duplicated directive (e.g. a duplicate client_max_body_size) makes
+# nginx refuse to load even though each file looks plausible on its own.
+# `nginx -t` validates the whole live config the way nginx does at reload, so a
+# broken config surfaces here instead of at the next (possibly automated) reload.
+echo "---- nginx -t (live config syntax) ----"
+if command -v nginx >/dev/null 2>&1; then
+    if nginx -t >"$tmp/nginx-t" 2>&1; then
+        echo "OK       nginx -t (configuration valid)"
+    else
+        echo "FAIL     nginx -t (configuration invalid)"
+        sed 's/^/    /' "$tmp/nginx-t"
+        status=1
+    fi
+else
+    echo "SKIP     nginx -t (nginx not installed)"
+fi
+
 exit $status
