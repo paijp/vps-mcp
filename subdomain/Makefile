@@ -15,7 +15,7 @@ sub_of    = $(word 1,$(subst __, ,$(1)))
 email_of  = $(word 2,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list mcpupdate check
+.PHONY: help image install-binaries install-services list mcpupdate check checkall
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -43,15 +43,18 @@ help:
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
 	@printf "Check installed files against this checkout:\n"
 	@printf "  make check\n"
-	@printf "      Diffs installed proxy units, nftables, BIND/opendkim/dnf-automatic\n"
-	@printf "      configs, and (if built) the container image's MCP app against the\n"
-	@printf "      repo (replaying template substitutions). Highlights drift in files\n"
-	@printf "      no update target refreshes automatically — re-run setupdone /\n"
-	@printf "      install-services / image to bring them back in sync.\n"
-	@printf "      Also inspects every running <name>-web container: diffs the baked\n"
-	@printf "      nginx/systemd/init files that 'mcpupdate' does NOT refresh and runs\n"
-	@printf "      'nginx -t' inside each, so a stale or unloadable container config\n"
-	@printf "      is caught (rebuild with 'make image' + recreate the container).\n\n"
+	@printf "      Summary: one status line (OK/DIFFER/MISSING) per file for the\n"
+	@printf "      installed proxy units, nftables, BIND/opendkim/dnf-automatic\n"
+	@printf "      configs, the container image's MCP app, and the files baked into\n"
+	@printf "      every running <name>-web container. Also runs 'nginx -t' inside\n"
+	@printf "      each container. Only the nginx configs also print HOW they differ\n"
+	@printf "      (a duplicate directive there takes the server down); everything\n"
+	@printf "      else just says same-or-different.\n"
+	@printf "  make checkall\n"
+	@printf "      Same checks, but print the full diff for EVERY differing file.\n"
+	@printf "  make alice.check\n"
+	@printf "      Verbose check of a single container (stem -> <stem>-web);\n"
+	@printf "      skips the host-side checks.\n\n"
 	@printf "Variables:\n"
 	@printf "  IMAGE   Container image tag (default: vps-mcp:latest)\n"
 
@@ -338,8 +341,22 @@ mcpupdate:
 # live host on an old copy. Then, for every running <name>-web container, diffs
 # the baked nginx/systemd/init files (which `mcpupdate` never refreshes) and
 # runs `nginx -t` inside the container to catch a config it cannot load.
+#
+#   check              summary (status line per file; nginx diffs still shown)
+#   checkall           verbose (full diff for every differing file)
+#   <stem>.check       verbose check of one container (<stem>-web), host skipped
 check:
 	@sh scripts/check-installed.sh
+
+checkall:
+	@VERBOSE=1 sh scripts/check-installed.sh
+
+# Verbose check of a single running container. Stem is the subdomain label:
+#   make alice.check    → alice-web
+#   make oauth.check    → oauth-web
+#   make default.check  → default-web
+%.check:
+	@VERBOSE=1 sh scripts/check-installed.sh $*-web
 
 # Update one running container in place. Stem is the subdomain label:
 #   make alice.mcpupdate    → alice-web
