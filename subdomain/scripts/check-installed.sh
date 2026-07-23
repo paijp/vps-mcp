@@ -15,11 +15,14 @@
 # Exit 0 if everything is OK/SKIP, 1 if any file is DIFFER / MISSING / FAIL.
 #
 # Modes (driven by the Makefile targets — run from the `subdomain/` directory):
-#   make check              summary: one status line per file. Only the nginx
-#                           configs also print HOW they differ (the diff of the
-#                           original-equivalent content), since that's where a
-#                           silent drift takes the server down.
-#   make checkall           verbose: print the diff for EVERY differing file.
+#   make check              summary: one status line per file. The nginx configs
+#                           also print HOW they differ, but only for the repo's
+#                           own content — location blocks an operator adds are
+#                           ignored, so the output isn't flooded by local
+#                           customisations (only real drift in shipped content,
+#                           the kind that silently takes the server down, shows).
+#   make checkall           verbose: print the diff for EVERY differing file
+#                           (nginx configs then show their added blocks too).
 #   make <container>.check  verbose, scoped to one container (e.g. alice.check
 #                           → alice-web); skips the host-side checks.
 #
@@ -47,6 +50,20 @@ status=0
 
 # show_diff EXPECTED ACTUAL — print an indented, truncated unified diff.
 show_diff() { diff -u "$1" "$2" | sed 's/^/    /' | head -n 40; }
+
+# filtered_hunks DIFF_FILE — read a `diff -u` file and print only the hunks that
+# remove or change a line from the expected (repo) side, dropping the file
+# headers and any pure-addition hunk. Used by the "orig" mode so operator-added
+# blocks (e.g. extra location {} sections) don't flood the output; only drift in
+# the repo-provided content is shown.
+filtered_hunks() {
+    awk '
+        /^--- / || /^\+\+\+ / { next }
+        /^@@/ { if (keep) printf "%s", buf; buf = $0 "\n"; keep = 0; next }
+        { buf = buf $0 "\n"; if (substr($0, 1, 1) == "-") keep = 1 }
+        END { if (keep) printf "%s", buf }
+    ' "$1"
+}
 
 subst_domain() { sed "s|__DOMAIN__|$DOMAIN|g" "$1"; }
 
@@ -99,17 +116,23 @@ norm_cert() {
            -e 's|^([[:space:]]*ssl_certificate)[[:space:]].*|\1 __CERT__;|'
 }
 
-# check_in_container CONTAINER SRC DST [render] [normalize] [always_diff]
+# check_in_container CONTAINER SRC DST [render] [normalize] [mode]
 #   Compare a file inside a running container against the repo copy.
-#     render      optional cmd (given the SRC path) that replays install-time
-#                 edits; defaults to plain `cat`.
-#     normalize   optional filter (reads stdin) applied to BOTH the expected and
-#                 the actual content before comparison, to mask lines that
-#                 legitimately vary at runtime; defaults to `cat`.
-#     always_diff 1 = print the diff whenever it differs, even in summary mode
-#                 (used for the nginx configs). Default 0 = only when VERBOSE=1.
+#     render     optional cmd (given the SRC path) that replays install-time
+#                edits; defaults to plain `cat`.
+#     normalize  optional filter (reads stdin) applied to BOTH the expected and
+#                the actual content before comparison, to mask lines that
+#                legitimately vary at runtime; defaults to `cat`.
+#     mode       ""     (default) exact compare — ANY difference is drift; the
+#                       diff body is shown only when VERBOSE=1.
+#                "orig" repo-content-preserved compare, for the nginx configs an
+#                       operator is expected to EXTEND. Lines added in the
+#                       container are ignored; only removals/changes to the
+#                       repo-provided content count as drift, and only those are
+#                       shown (even in summary mode) so locally-added location
+#                       blocks don't flood the output.
 check_in_container() {
-    c=$1; src=$2; dst=$3; render=${4:-cat}; normalize=${5:-cat}; always_diff=${6:-0}
+    c=$1; src=$2; dst=$3; render=${4:-cat}; normalize=${5:-cat}; mode=${6:-}
     if [ ! -e "$src" ]; then
         echo "SKIP     $c:$dst  (repo source $src missing)"
         return
@@ -125,13 +148,36 @@ check_in_container() {
     eval "$render \"\$src\"" | $normalize > "$exp"
     # shellcheck disable=SC2086
     $normalize < "$actual" > "$actual.norm"
+
     if cmp -s "$exp" "$actual.norm"; then
         echo "OK       $c:$dst"
-    else
-        echo "DIFFER   $c:$dst  (source: $src)"
-        { [ "$VERBOSE" = 1 ] || [ "$always_diff" = 1 ]; } && show_diff "$exp" "$actual.norm"
-        status=1
+        return
     fi
+
+    if [ "$mode" = orig ]; then
+        diff -u "$exp" "$actual.norm" > "$tmp/raw.diff"
+        removed=$(sed '1,2d' "$tmp/raw.diff" | grep -c '^-')
+        added=$(sed '1,2d' "$tmp/raw.diff" | grep -c '^+')
+        if [ "$removed" -eq 0 ]; then
+            # Every repo line is still present; the only differences are lines
+            # the operator added locally — a customisation, not drift.
+            echo "OK       $c:$dst  (repo content preserved; +$added local line(s))"
+            [ "$VERBOSE" = 1 ] && sed '1,2d' "$tmp/raw.diff" | sed 's/^/    /' | head -n 40
+            return
+        fi
+        echo "DIFFER   $c:$dst  (source: $src; repo content changed)"
+        if [ "$VERBOSE" = 1 ]; then
+            sed '1,2d' "$tmp/raw.diff" | sed 's/^/    /' | head -n 40
+        else
+            filtered_hunks "$tmp/raw.diff" | sed 's/^/    /' | head -n 40
+        fi
+        status=1
+        return
+    fi
+
+    echo "DIFFER   $c:$dst  (source: $src)"
+    [ "$VERBOSE" = 1 ] && show_diff "$exp" "$actual.norm"
+    status=1
 }
 
 # ── host-side files (skipped when checking a single container) ────────────────
@@ -238,10 +284,12 @@ if command -v podman >/dev/null 2>&1; then
         check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
         check_in_container "$c" container/systemd/vps-mcp-init.sh   /usr/local/bin/vps-mcp-init.sh
         check_in_container "$c" container/systemd/certbot-deploy.sh /usr/local/bin/certbot-deploy.sh
-        check_in_container "$c" container/nginx/nginx.conf          /etc/nginx/nginx.conf          cat cat 1
+        # nginx configs use "orig" mode: operators are expected to add their own
+        # location blocks, so only drift in the repo-provided content is flagged.
+        check_in_container "$c" container/nginx/nginx.conf          /etc/nginx/nginx.conf          cat cat orig
         # vps-mcp.conf: replay the server_name substitution and normalise the
         # ssl_certificate* lines on both sides (see render_vhost / norm_cert).
-        check_in_container "$c" container/nginx/vps-mcp.conf        /etc/nginx/conf.d/vps-mcp.conf render_vhost norm_cert 1
+        check_in_container "$c" container/nginx/vps-mcp.conf        /etc/nginx/conf.d/vps-mcp.conf render_vhost norm_cert orig
 
         if podman exec "$c" nginx -t >"$tmp/nginx-t" 2>&1; then
             echo "OK       $c: nginx -t (configuration valid)"
