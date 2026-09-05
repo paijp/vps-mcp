@@ -6,6 +6,8 @@ FROM rockylinux:10
 # certbot comes from EPEL; nodejs 22 from AppStream — no third-party repos.
 # Automatic security updates use dnf-automatic-install.timer, covered by
 # Red Hat's security team through the AppStream / BaseOS / EPEL channels.
+# iproute / procps-ng / lsof / sqlite / jq are the everyday tools exec_command
+# reaches for (ss, ps, lsof, sqlite3, jq); a minimal image ships none of them.
 RUN dnf install -y epel-release \
     && dnf install -y \
         systemd \
@@ -18,6 +20,11 @@ RUN dnf install -y epel-release \
         npm \
         curl \
         dnf-automatic \
+        iproute \
+        procps-ng \
+        lsof \
+        sqlite \
+        jq \
     && dnf clean all
 
 # ── Disable unwanted units ────────────────────────────────────────────────────

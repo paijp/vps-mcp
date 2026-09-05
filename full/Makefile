@@ -79,19 +79,22 @@ help:
 	    > /etc/vps-mcp/host.env
 
 	# ── packages ────────────────────────────────────────────────────────────
+	# iproute(2) / procps(-ng) / lsof / sqlite(3) / jq are the everyday tools
+	# exec_command reaches for (ss, ps, lsof, sqlite3, jq); a minimal cloud
+	# image ships few of them. Package names differ between apt and dnf.
 	if command -v apt-get >/dev/null 2>&1; then \
 	    apt-get update; \
 	    apt-get upgrade -y; \
 	    apt-get install -y nginx certbot python3-certbot-nginx \
 	        bind9 postfix opendkim opendkim-tools unattended-upgrades \
-	        curl; \
+	        curl iproute2 procps lsof sqlite3 jq; \
 	elif command -v dnf >/dev/null 2>&1; then \
 	    dnf install -y epel-release 2>/dev/null || \
 	        dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-$$(rpm -E %rhel).noarch.rpm" 2>/dev/null || true; \
 	    dnf upgrade -y; \
 	    dnf install -y nginx certbot python3-certbot-nginx \
 	        bind bind-utils postfix opendkim opendkim-tools dnf-automatic \
-	        curl; \
+	        curl iproute procps-ng lsof sqlite jq; \
 	else echo "Error: no supported package manager"; exit 1; fi
 
 	# ── Node.js 22 (NodeSource) ─────────────────────────────────────────────
