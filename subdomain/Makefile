@@ -375,6 +375,13 @@ checkall:
 	podman cp container/mcp/package.json $$c:/opt/mcp/package.json; \
 	podman cp container/mcp/index.mjs    $$c:/opt/mcp/index.mjs; \
 	podman exec $$c sh -c 'cd /opt/mcp && npm install --omit=dev'; \
+	: '`npm install` leaves an already-present package that still satisfies its'; \
+	: 'semver range untouched, so a container created months ago keeps its old'; \
+	: '(vulnerable) express tree. `npm update` moves every dependency to the'; \
+	: 'newest release inside its range. Non-fatal: a registry hiccup must not'; \
+	: 'leave mcp-server stopped.'; \
+	podman exec $$c sh -c 'cd /opt/mcp && npm update --omit=dev' || \
+	    echo "    $$c: WARNING: npm update failed; dependencies not refreshed"; \
 	podman exec $$c systemctl start mcp-server; \
 	sh scripts/ensure-tools.sh $$c; \
 	echo "    $$c updated"

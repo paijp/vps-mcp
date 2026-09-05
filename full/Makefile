@@ -35,10 +35,10 @@ help:
 	@printf "Update an already-set-up host (after git pull):\n"
 	@printf "  make mcpupdate\n"
 	@printf "      Stops mcp-server, reinstalls /opt/mcp (index.mjs,\n"
-	@printf "      package.json+deps), the systemd unit and /srv/deploy, then\n"
-	@printf "      restarts it, and installs any missing diagnostic tools\n"
-	@printf "      (ss, ps, lsof, sqlite3, jq). Does not touch the nginx config\n"
-	@printf "      (certbot owns TLS).\n\n"
+	@printf "      package.json, deps installed AND npm-updated), the systemd\n"
+	@printf "      unit and /srv/deploy, installs any missing diagnostic tool\n"
+	@printf "      (ss, ps, lsof, sqlite3, jq), then restarts it. Does not\n"
+	@printf "      touch the nginx config (certbot owns TLS).\n\n"
 	@printf "Check installed files against this checkout:\n"
 	@printf "  make check\n"
 	@printf "      Diffs the installed copies of the MCP app, systemd units,\n"
@@ -307,7 +307,15 @@ mcpupdate:
 	mkdir -p /opt/mcp
 	install -m 644 mcp/index.mjs    /opt/mcp/index.mjs
 	install -m 644 mcp/package.json /opt/mcp/package.json
-	cd /opt/mcp && npm install --omit=dev
+	# `npm install` only adds what is missing: a package already present that
+	# still satisfies its semver range (e.g. express 4.18 under ^4.18.0) is left
+	# alone, so an old tree keeps its known-vulnerable versions forever. `npm
+	# update` pulls every dependency to the newest release inside its range,
+	# which is where the express 4.x path-to-regexp / send / body-parser fixes
+	# live. Failure is not fatal: a transient registry problem must not leave
+	# mcp-server stopped.
+	cd /opt/mcp && npm install --omit=dev && { npm update --omit=dev || \
+	    echo "mcpupdate: WARNING: npm update failed; dependencies not refreshed"; }
 	install -m 644 systemd/mcp-server.service /etc/systemd/system/
 	mkdir -p /srv/deploy
 	# Diagnostic tools (ss/ps/lsof/sqlite3/jq): install whichever are missing,

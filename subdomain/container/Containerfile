@@ -82,6 +82,11 @@ RUN postconf -e \
 # ── MCP server ────────────────────────────────────────────────────────────────
 RUN mkdir -p /opt/mcp
 COPY mcp/package.json /opt/mcp/package.json
+# Note: when this layer comes from the build cache it carries the dependency
+# tree of the day it was first built — adding `npm update` here would not help,
+# since a cache hit skips the whole RUN. Use `podman build --no-cache` (or rely
+# on `make mcpupdate`, which runs `npm update` inside each running container)
+# to refresh the dependencies.
 RUN cd /opt/mcp && npm install --omit=dev
 
 COPY mcp/index.mjs /opt/mcp/index.mjs

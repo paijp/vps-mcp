@@ -109,7 +109,9 @@ After pulling a newer version of this repo onto the host:
 make mcpupdate
 ```
 
-This stops `mcp-server`, reinstalls `/opt/mcp` (`index.mjs`, `package.json` + deps), the
+This stops `mcp-server`, reinstalls `/opt/mcp` (`index.mjs`, `package.json` + deps — also
+running `npm update` so dependencies move to the newest release inside their semver range;
+plain `npm install` would leave an already-present, still-in-range version untouched), the
 systemd unit and `/srv/deploy`, installs any missing diagnostic tool (`ss`, `ps`, `lsof`,
 `sqlite3`, `jq` — the list lives in `scripts/tools.sh`), then restarts it — without
 re-running the full host setup.
