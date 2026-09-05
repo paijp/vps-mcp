@@ -202,6 +202,11 @@ learned from the broker's `/mcp/resolve` response and bound at login
 returns the workflow but prints a warning. The endpoint is **not** offered on the
 oauth broker container.
 
+For replay protection each token's `jti` is accepted **once**, so one token covers
+exactly one PUT — a workflow that mints a single token and loops over several
+files gets 401 from the second file on. The generated workflow therefore mints a
+fresh token inside the upload loop, one per file.
+
 ## Updating the MCP app
 
 The MCP app (`index.mjs` + its `node_modules`) is baked into the image and copied
