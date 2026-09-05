@@ -8,6 +8,8 @@ FROM rockylinux:10
 # Red Hat's security team through the AppStream / BaseOS / EPEL channels.
 # iproute / procps-ng / lsof / sqlite / jq are the everyday tools exec_command
 # reaches for (ss, ps, lsof, sqlite3, jq); a minimal image ships none of them.
+# Keep this list in sync with ../scripts/tools.sh, which drives the same install
+# for already-running containers (make mcpupdate) and the `make check` report.
 RUN dnf install -y epel-release \
     && dnf install -y \
         systemd \

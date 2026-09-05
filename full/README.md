@@ -110,7 +110,9 @@ make mcpupdate
 ```
 
 This stops `mcp-server`, reinstalls `/opt/mcp` (`index.mjs`, `package.json` + deps), the
-systemd unit and `/srv/deploy`, then restarts it — without re-running the full host setup.
+systemd unit and `/srv/deploy`, installs any missing diagnostic tool (`ss`, `ps`, `lsof`,
+`sqlite3`, `jq` — the list lives in `scripts/tools.sh`), then restarts it — without
+re-running the full host setup.
 (The service is stopped first so a crash mid-update can't auto-restart on half-written
 files.) The same target is used internally by `make …setupdone`, so initial install and
 update share one code path. It does **not** touch the nginx config (certbot rewrites the TLS

@@ -38,7 +38,8 @@ help:
 	@printf "  make list                          List running VPS containers\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
-	@printf "  make mcpupdate            Update ALL running containers in place (stop + cp + npm install + start)\n"
+	@printf "  make mcpupdate            Update ALL running containers in place (stop + cp + npm install + start,\n"
+	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
 	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
 	@printf "Check installed files against this checkout:\n"
@@ -47,7 +48,8 @@ help:
 	@printf "      installed proxy units, nftables, BIND/opendkim/dnf-automatic\n"
 	@printf "      configs, the container image's MCP app, and the files baked into\n"
 	@printf "      every running <name>-web container. Also runs 'nginx -t' inside\n"
-	@printf "      each container. The nginx configs also print HOW they differ,\n"
+	@printf "      each container, and reports any missing diagnostic tool\n"
+	@printf "      (ss/ps/lsof/sqlite3/jq). The nginx configs also print HOW they differ,\n"
 	@printf "      but only for the repo's own content — location blocks you add\n"
 	@printf "      locally are ignored, so only real drift in shipped content\n"
 	@printf "      (the kind that takes the server down) shows; everything else\n"
@@ -374,4 +376,5 @@ checkall:
 	podman cp container/mcp/index.mjs    $$c:/opt/mcp/index.mjs; \
 	podman exec $$c sh -c 'cd /opt/mcp && npm install --omit=dev'; \
 	podman exec $$c systemctl start mcp-server; \
+	sh scripts/ensure-tools.sh $$c; \
 	echo "    $$c updated"

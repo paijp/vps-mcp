@@ -123,4 +123,25 @@ else
     echo "SKIP     nginx -t (nginx not installed)"
 fi
 
+# ── diagnostic tools ─────────────────────────────────────────────────────────
+# The everyday tools exec_command reaches for (ss, ps, lsof, sqlite3, jq). A
+# host set up before they were added to the package set is missing them; the
+# executable is what matters, so test the command rather than the package.
+# `make mcpupdate` installs whatever is reported MISSING here.
+echo "---- diagnostic tools ----"
+# shellcheck disable=SC1091
+. "$(dirname "$0")/tools.sh"
+if command -v dnf >/dev/null 2>&1; then _pkgcol=2; else _pkgcol=3; fi
+_toolreport=$(echo "$MCP_TOOLS" | while read -r cmd dnfpkg aptpkg; do
+    [ -n "$cmd" ] || continue
+    if [ "$_pkgcol" = 2 ]; then pkg=$dnfpkg; else pkg=$aptpkg; fi
+    if command -v "$cmd" >/dev/null 2>&1; then
+        echo "OK       tool:$cmd"
+    else
+        echo "MISSING  tool:$cmd  (package: $pkg) — run 'make mcpupdate'"
+    fi
+done)
+echo "$_toolreport"
+case "$_toolreport" in *MISSING*) status=1 ;; esac
+
 exit $status

@@ -36,7 +36,9 @@ help:
 	@printf "  make mcpupdate\n"
 	@printf "      Stops mcp-server, reinstalls /opt/mcp (index.mjs,\n"
 	@printf "      package.json+deps), the systemd unit and /srv/deploy, then\n"
-	@printf "      restarts it. Does not touch the nginx config (certbot owns TLS).\n\n"
+	@printf "      restarts it, and installs any missing diagnostic tools\n"
+	@printf "      (ss, ps, lsof, sqlite3, jq). Does not touch the nginx config\n"
+	@printf "      (certbot owns TLS).\n\n"
 	@printf "Check installed files against this checkout:\n"
 	@printf "  make check\n"
 	@printf "      Diffs the installed copies of the MCP app, systemd units,\n"
@@ -45,7 +47,8 @@ help:
 	@printf "      drift in files that mcpupdate does NOT refresh — most notably\n"
 	@printf "      nginx/vps-mcp.conf, which needs a manual merge after edits.\n"
 	@printf "      Finally runs 'nginx -t' so a broken live config (e.g. a\n"
-	@printf "      duplicate directive) surfaces here, not at the next reload.\n\n"
+	@printf "      duplicate directive) surfaces here, not at the next reload,\n"
+	@printf "      and reports any missing diagnostic tool (ss/ps/lsof/sqlite3/jq).\n\n"
 	@printf "Variables (auto-read from /etc/vps-mcp/host.env after setupdone):\n"
 	@printf "  DOMAIN  IP  EMAIL\n"
 
@@ -307,6 +310,9 @@ mcpupdate:
 	cd /opt/mcp && npm install --omit=dev
 	install -m 644 systemd/mcp-server.service /etc/systemd/system/
 	mkdir -p /srv/deploy
+	# Diagnostic tools (ss/ps/lsof/sqlite3/jq): install whichever are missing,
+	# so an already-set-up host gains them without re-running setup.
+	@sh scripts/ensure-tools.sh
 	systemctl daemon-reload
 	systemctl restart mcp-server
 	@printf "mcpupdate: /opt/mcp refreshed and mcp-server restarted.\n"

@@ -43,6 +43,9 @@ if [ ! -f /etc/vps-mcp/host.env ]; then
 fi
 # shellcheck disable=SC1091
 . /etc/vps-mcp/host.env
+# MCP_TOOLS: the diagnostic tools every container should carry (see tools.sh).
+# shellcheck disable=SC1091
+. "$(dirname "$0")/tools.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -290,6 +293,21 @@ if command -v podman >/dev/null 2>&1; then
         # vps-mcp.conf: replay the server_name substitution and normalise the
         # ssl_certificate* lines on both sides (see render_vhost / norm_cert).
         check_in_container "$c" container/nginx/vps-mcp.conf        /etc/nginx/conf.d/vps-mcp.conf render_vhost norm_cert orig
+
+        # Diagnostic tools (ss/ps/lsof/sqlite3/jq). A container created from an
+        # image built before they were added carries none of them; the
+        # executable is what matters, so test the command, not the package.
+        # `make mcpupdate` installs whatever is reported MISSING here.
+        _toolreport=$(echo "$MCP_TOOLS" | while read -r cmd pkg; do
+            [ -n "$cmd" ] || continue
+            if podman exec "$c" sh -c "command -v $cmd" >/dev/null 2>&1; then
+                echo "OK       $c: tool:$cmd"
+            else
+                echo "MISSING  $c: tool:$cmd  (package: $pkg) — run 'make ${c%-web}.mcpupdate'"
+            fi
+        done)
+        echo "$_toolreport"
+        case "$_toolreport" in *MISSING*) status=1 ;; esac
 
         if podman exec "$c" nginx -t >"$tmp/nginx-t" 2>&1; then
             echo "OK       $c: nginx -t (configuration valid)"
