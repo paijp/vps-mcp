@@ -220,6 +220,23 @@ install-services:
 	    printf '\ninclude "/etc/nftables.d/*.nft"\n' >> /etc/nftables.conf
 	systemctl enable nftables
 	nft -f /etc/nftables.d/vps-mcp.nft
+	# Outbound mail limits per container (client IP on the relay):
+	#   - anvil: 5 messages / 20 recipients per minute (excess gets 4xx, so the
+	#     container's Postfix queues and retries). Exceptions default to
+	#     $$mynetworks, which includes the containers, so clear them.
+	#   - vps-mcp-mailquota policy: 200 messages per day (excess gets 5xx).
+	# Idempotent, so re-running install-services applies it to existing hosts.
+	useradd -r -s /sbin/nologin vpsmailq 2>/dev/null || true
+	install -m 755 host/postfix/vps-mcp-mailquota.sh /usr/local/libexec/vps-mcp-mailquota.sh
+	install -d -m 700 -o vpsmailq -g vpsmailq /var/lib/vps-mcp-mailquota
+	postconf -M "vps-mcp-mailquota/unix=vps-mcp-mailquota unix - n n - 0 spawn user=vpsmailq argv=/usr/local/libexec/vps-mcp-mailquota.sh"
+	postconf -e "vps-mcp-mailquota_time_limit = 3600s"
+	postconf -e "anvil_rate_time_unit = 60s"
+	postconf -e "smtpd_client_message_rate_limit = 5"
+	postconf -e "smtpd_client_recipient_rate_limit = 20"
+	postconf -e "smtpd_client_event_limit_exceptions ="
+	postconf -e "smtpd_end_of_data_restrictions = check_policy_service unix:private/vps-mcp-mailquota"
+	systemctl reload postfix
 
 # ── sshsec.done — optional SSH hardening ──────────────────────────────────────
 # Usage: make sshsec.done

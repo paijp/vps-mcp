@@ -200,7 +200,8 @@ check_pair host/systemd/vps-mcp-reboot.timer   /etc/systemd/system/vps-mcp-reboo
 check_pair host/nftables/vps-mcp.nft.tmpl      /etc/nftables.d/vps-mcp.nft        render_nft
 
 # ── opendkim ────────────────────────────────────────────────────────────────
-check_pair host/opendkim/opendkim.conf.tmpl    /etc/opendkim.conf                 subst_domain
+check_pair host/postfix/vps-mcp-mailquota.sh   /usr/local/libexec/vps-mcp-mailquota.sh
+check_pair host/opendkim/opendkim.conf.tmpl   /etc/opendkim.conf                 subst_domain
 
 # ── BIND (paths differ between apt and dnf) ──────────────────────────────────
 if command -v dnf >/dev/null 2>&1; then
