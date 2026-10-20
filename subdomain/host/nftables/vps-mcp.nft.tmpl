@@ -10,6 +10,10 @@
 #   policy accept, but an nftables drop is terminal across base chains, so
 #   this default-drop chain tightens ingress regardless.
 #
+# forward chain (policy accept):
+#   Blocks direct outbound SMTP (25) from containers, forcing mail through
+#   the rate-limited host relay.
+#
 # output chain (policy accept):
 #   Prevents compromised non-root, non-proxy user accounts from making new
 #   outbound connections.  UIDs are substituted at install time by
@@ -46,6 +50,15 @@ table inet vps-mcp {
 
         # SMTP relay — container subnet only (containers relay outbound mail).
         ip saddr 10.89.0.0/24 tcp dport 25 accept
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+
+        # Containers must send mail through the host relay (10.89.0.1:25),
+        # where per-container rate limits and quotas apply; block direct
+        # SMTP to the outside so they cannot bypass it.
+        ip saddr 10.89.0.0/24 tcp dport 25 reject with tcp reset
     }
 
     chain output {

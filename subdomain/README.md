@@ -238,7 +238,7 @@ try to bind it.
 - Only a SHA-256 hash of the issued Bearer token is retained on disk.
 - The MCP server listens on `127.0.0.1:3000` only.
 - `vps-mcp.nft` runs a default-drop INPUT filter that exposes only SSH (22), HTTP/HTTPS (80/443), and DNS (53) publicly; SMTP (25) is reachable from the container subnet only.
-- Outbound mail is limited per container on the host relay: 5 messages / 20 recipients per minute (Postfix anvil; excess is deferred with 4xx and retried from the container's queue) and 200 messages per day (`host/postfix/vps-mcp-mailquota.sh` policy service; excess is rejected with 5xx). Run `make install-services` to apply this to an already-installed host.
+- Outbound mail is limited per container on the host relay: 5 messages / 20 recipients per minute (Postfix anvil; excess is deferred with 4xx and retried from the container's queue) and 200 messages per day (`host/postfix/vps-mcp-mailquota.sh` policy service; excess is rejected with 5xx). Direct outbound SMTP (25) from containers is blocked in the nftables forward chain, so the relay cannot be bypassed. Run `make install-services` to apply this to an already-installed host.
 - `vps-mcp.nft` also blocks new outbound connections from non-root host users; established/related traffic is always allowed.
 - Optional SSH hardening is available via `make sshsec.done` (not run by setup): it disables host SSH password authentication (`host/ssh/00-vps-mcp-hardening.conf` — access is key-based, and since containers grant participants root and can reach the host's `:22`, this removes brute-force exposure of host accounts) and installs `fail2ban` with the nftables banaction (`host/fail2ban/jail.d/00-vps-mcp.conf`).
 
