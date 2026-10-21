@@ -300,6 +300,7 @@ sshsec.done:
 	    --restart  always \
 	    --memory   1g \
 	    --pids-limit 200 \
+	    --cap-drop NET_RAW,NET_ADMIN \
 	    --env      SUBDOMAIN=$(_SUBDOMAIN) \
 	    --env      MAIL_DOMAIN=$(_SUB).$(DOMAIN) \
 	    --env      NOTIFY_EMAIL=$(_EMAIL) \
