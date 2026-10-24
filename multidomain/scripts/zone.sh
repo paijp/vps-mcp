@@ -111,6 +111,9 @@ apply)
         echo "$D $D:mail:/etc/opendkim/keys/$D/mail.private" >> /etc/opendkim/KeyTable; dkim_changed=1; }
     grep -qxF "*@$D $D" /etc/opendkim/SigningTable || {
         printf '*@%s %s\n*@*.%s %s\n' "$D" "$D" "$D" "$D" >> /etc/opendkim/SigningTable; dkim_changed=1; }
+    # The packaged tables are root:root 0640; opendkim runs as its own user.
+    chgrp opendkim /etc/opendkim/KeyTable /etc/opendkim/SigningTable
+    chmod 640 /etc/opendkim/KeyTable /etc/opendkim/SigningTable
 
     # ── build and check the zone ────────────────────────────────────────────
     today=$(date +%Y%m%d)01

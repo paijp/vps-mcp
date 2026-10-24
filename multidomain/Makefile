@@ -118,6 +118,8 @@ help:
 	systemctl enable --now named
 	mkdir -p /etc/opendkim/keys; \
 	touch /etc/opendkim/KeyTable /etc/opendkim/SigningTable; \
+	chgrp opendkim /etc/opendkim/KeyTable /etc/opendkim/SigningTable; \
+	chmod 640 /etc/opendkim/KeyTable /etc/opendkim/SigningTable; \
 	install -m 644 host/opendkim/opendkim.conf.tmpl /etc/opendkim.conf; \
 	systemctl enable --now opendkim; \
 	postconf -e "inet_interfaces = all"; \
