@@ -357,13 +357,13 @@ domains:
 # ── list ──────────────────────────────────────────────────────────────────────
 
 list:
-	@podman ps -a --filter "name=-web" --format "{{.Names}}\t{{.Status}}\t{{.IPAddress}}" | \
+	@podman ps -a --filter "name=-web" --format "{{.Names}}\t{{.Status}}" | \
 	awk -F'\t' 'NR == FNR { dom[NR] = $$0; nd = NR; next } \
 	    { h = $$1; sub(/-web$$/, "", h); best = "(unregistered)"; \
 	      for (i = 1; i <= nd; i++) { d = dom[i]; \
 	          if ((h == d || substr(h, length(h) - length(d)) == "." d) && length(d) > length(b2)) { best = d; b2 = d } } \
 	      b2 = ""; print best "\t" $$0 }' /etc/vps-mcp/domains - | sort | \
-	awk -F'\t' '$$1 != prev { print "\n" $$1; prev = $$1 } { printf "  %-40s %-28s %s\n", $$2, $$3, $$4 }'
+	awk -F'\t' '$$1 != prev { print "\n" $$1; prev = $$1 } { printf "  %-40s %s\n", $$2, $$3 }'
 
 # ── MCP app update ─────────────────────────────────────────────────────────────
 # The MCP app (index.mjs + its node_modules) is baked into the image and copied
