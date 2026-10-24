@@ -1,0 +1,5 @@
+*.dns
+*.dnsdone
+!example.com.dns
+*.setupdone
+*.done
