@@ -330,7 +330,7 @@ sshsec.done:
 # ── list ──────────────────────────────────────────────────────────────────────
 
 list:
-	@podman ps --filter "name=-web" --format "table {{.Names}}\t{{.Status}}\t{{.IPAddress}}"
+	@podman ps --filter "name=-web" --format "table {{.Names}}\t{{.Status}}"
 
 # ── MCP app update ─────────────────────────────────────────────────────────────
 # The MCP app (index.mjs + its node_modules) is baked into the image and copied
