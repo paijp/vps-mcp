@@ -131,6 +131,11 @@ help:
 	postconf -e "milter_protocol = 6"; \
 	postconf -e "milter_default_action = accept"; \
 	systemctl enable --now postfix
+	# firewalld (enabled by default on Rocky) keeps its own nftables table, which
+	# can drop traffic vps-mcp.nft allows and rebuilds rules on start/reload,
+	# wiping the vps-mcp and podman rules. vps-mcp.nft is the only firewall here.
+	systemctl disable --now firewalld 2>/dev/null || true
+	systemctl mask firewalld
 	podman network create --subnet 10.89.0.0/24 --disable-dns vpsmcp-net 2>/dev/null || true
 	systemctl enable --now podman.socket
 	systemctl enable podman-restart.service
