@@ -1,0 +1,23 @@
+[Unit]
+Description=VPS MCP Server
+Documentation=https://github.com/paijp/vps-subdomain-mcp
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/vps-mcp-env
+ExecStart=/usr/bin/node /opt/mcp/index.mjs
+Restart=on-failure
+RestartSec=5
+
+# Hardening note: ProtectSystem is intentionally NOT set. By design the MCP
+# connector grants full root access (exec_command runs as root) and the server
+# writes secrets under /etc/mcp-server (hash, token, deploy_owner), so a
+# read-only /etc would be contrary to the design. It was also a no-op here:
+# this container's systemd cannot apply the mount-namespace sandbox under
+# podman, so ProtectSystem=full silently had no effect anyway.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

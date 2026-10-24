@@ -1,0 +1,14 @@
+; https://github.com/paijp/vps-subdomain-mcp
+;
+; Operator-managed DNS records for one domain (multidomain edition).
+; Copy to <your-domain>.dns, edit, then run:  make <your-domain>.dnsdone
+; Re-run after every edit; delete a line and re-run to delete a record.
+;
+; Names are relative to the domain (@ = the domain itself).
+; Host-managed, do not write here: SOA, NS, @ / * / ns1 A, SPF, DMARC,
+; DKIM (mail._domainkey), and A/AAAA/CNAME on names served by a container.
+; Every record line must start with its owner name (no leading whitespace).
+
+; @       IN MX    10 mail.example.net.
+; @       IN TXT   "google-site-verification=xxxxxxxx"
+; docs    IN CNAME ghs.googlehosted.com.

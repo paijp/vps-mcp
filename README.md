@@ -2,7 +2,7 @@
 
 Build a Claude.ai MCP server on a Sakura VPS, giving Claude control over the host.
 
-This repository hosts **three editions** of the project. Pick the one that matches how
+This repository hosts **four editions** of the project. Pick the one that matches how
 you want to deploy and operate:
 
 | Edition | Directory | Summary |
@@ -10,6 +10,7 @@ you want to deploy and operate:
 | **Startup script** | [`startupscript/`](startupscript/README.md) | Single-host edition deployed via Sakura's "My Scripts" startup script — a single condensed file (subject to the ~10,000-character My-Scripts limit). Easiest to bootstrap with no SSH. |
 | **Full** | [`full/`](full/) | Single-host edition as readable, multi-file source (Makefile-based deploy, GitHub OAuth login). New features land here first; because of the character limit, the startup-script edition will not always track it. |
 | **Subdomain** | [`subdomain/`](subdomain/README.md) | Multi-tenant edition: a broker plus per-tenant containers served under subdomains. |
+| **Multidomain** | [`multidomain/`](multidomain/README.md) | Multi-tenant edition for several domains on one host: one container per full hostname (`test.example.org-web`), one DNS zone per domain. Choose either this or `subdomain/` per server. |
 
 The `startupscript/` and `full/` editions are two forms of the same single-host design;
 the `full/` source is the readable reference, while the startup script is the condensed

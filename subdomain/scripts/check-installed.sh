@@ -192,6 +192,12 @@ check_pair host/systemd/vps-proxy443.service  /etc/systemd/system/vps-proxy443.s
 check_pair host/systemd/vps-proxy80.socket    /etc/systemd/system/vps-proxy80.socket
 check_pair host/systemd/vps-proxy80.service   /etc/systemd/system/vps-proxy80.service
 
+# ── firewalld must stay off (setupdone masks it) ────────────────────────────
+if systemctl is-active --quiet firewalld 2>/dev/null; then
+    echo "ACTIVE   firewalld  (conflicts with vps-mcp.nft; run: systemctl disable --now firewalld && systemctl mask firewalld)"
+    status=1
+fi
+
 # ── weekly reboot units ──────────────────────────────────────────────────────
 check_pair host/systemd/vps-mcp-reboot.service /etc/systemd/system/vps-mcp-reboot.service
 check_pair host/systemd/vps-mcp-reboot.timer   /etc/systemd/system/vps-mcp-reboot.timer
