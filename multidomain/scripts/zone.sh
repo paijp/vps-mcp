@@ -179,7 +179,8 @@ apply)
     rndc reconfig
     rndc reload "$D"
     rndc notify "$D" 2>/dev/null || true
-    [ -z "$dkim_changed" ] || systemctl restart opendkim
+    # try-restart: on a DNS-only host (dnssetupdone) opendkim may not run.
+    [ -z "$dkim_changed" ] || systemctl try-restart opendkim
     echo "$D: zone serial $serial is live."
     ;;
 
@@ -196,7 +197,7 @@ remove)
     done
     [ ! -f "$BACKUP_DIR/$D.dns" ] || mv "$BACKUP_DIR/$D.dns" "$BACKUP_DIR/$D.dns.removed"
     rndc reconfig
-    systemctl restart opendkim
+    systemctl try-restart opendkim
     echo "$D: zone removed (DKIM key kept in /etc/opendkim/keys/$D)."
     ;;
 

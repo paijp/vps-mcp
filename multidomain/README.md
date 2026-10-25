@@ -94,6 +94,14 @@ This:
 
 > **Long-lived containers**: containers run for weeks, so they receive Rocky Linux security updates automatically via `dnf-automatic-install.timer`. They are not rebooted individually — the host's weekly reboot plus `--restart=always` refreshes them.
 
+### Moving DNS first
+
+`make 203.0.113.1.dnssetupdone` installs only BIND (setupdone runs it too and
+keeps its zones). Run it alone on a host whose web server should stay as it
+is for now, register zones with `make <domain>.dnsdone`, and switch the domain
+at the registrar's DNS to "secondary of this host". Open port 53 (tcp/udp) if
+firewalld is still running. Run `make <IP>.setupdone` later to add the rest.
+
 ## Registering a domain
 
 Each domain has a records file `<domain>.dns` next to the Makefile (git-ignored;

@@ -22,6 +22,9 @@ help:
 	@printf "  make 203.0.113.1.setupdone\n"
 	@printf "      Packages, BIND, DKIM relay, vpsmcp-net, proxy sockets, nftables.\n"
 	@printf "      Registers no domain; IP is stored in /etc/vps-mcp/host.env.\n\n"
+	@printf "  make 203.0.113.1.dnssetupdone\n"
+	@printf "      BIND only (part of setupdone). Run alone to host DNS zones first\n"
+	@printf "      while the existing web server keeps running.\n\n"
 	@printf "Optional hardening:\n"
 	@printf "  make sshsec.done          Disable SSH password auth + install fail2ban\n\n"
 	@printf "Domains (DNS zones):\n"
@@ -66,6 +69,9 @@ help:
 
 # ── host setup ────────────────────────────────────────────────────────────────
 # Usage: make 203.0.113.1.setupdone
+#        make 203.0.113.1.dnssetupdone   (BIND only — run alone to move a
+#            domain's DNS here first while the web server stays as it is;
+#            setupdone runs it and keeps its zones)
 #
 # 1. Write /etc/vps-mcp/host.env  (IP, BIND_ZONE_DIR, BIND_CONF)
 # 2. Install BIND9 (authoritative only, no zones yet — see %.dnsdone)
@@ -74,6 +80,35 @@ help:
 # 5. Build container image
 # 6. Install Go proxy binaries
 # 7. Install proxy socket units + nftables (with proxy user UID substitution)
+
+%.dnssetupdone:
+	$(eval _IP := $*)
+	@echo "$(_IP)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$$' || \
+	    { echo "Error: format is  IP.dnssetupdone  e.g. 203.0.113.1.dnssetupdone"; exit 1; }
+	mkdir -p /etc/vps-mcp
+	touch /etc/vps-mcp/host.env /etc/vps-mcp/domains
+	sed -i '/^IP=/d' /etc/vps-mcp/host.env
+	echo "IP=$(_IP)" >> /etc/vps-mcp/host.env
+	if command -v apt-get >/dev/null 2>&1; then \
+	    apt-get install -y bind9 opendkim-tools; \
+	    BIND_ZONE_DIR=/etc/bind/zones; \
+	    BIND_CONF=/etc/bind/named.conf.local; \
+	elif command -v dnf >/dev/null 2>&1; then \
+	    dnf install -y epel-release || dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-$$(rpm -E %rhel).noarch.rpm"; \
+	    dnf install -y bind bind-utils opendkim opendkim-tools; \
+	    BIND_ZONE_DIR=/var/named; \
+	    mkdir -p /etc/named; \
+	    BIND_CONF=/etc/named/named.conf.local; \
+	    install -m 644 host/bind/named.conf.tmpl /etc/named.conf; \
+	else echo "Error: no supported package manager (apt-get or dnf)"; exit 1; fi; \
+	mkdir -p $$BIND_ZONE_DIR $$(dirname $$BIND_CONF)/zones.d; \
+	sed -i -e '/^BIND_ZONE_DIR=/d' -e '/^BIND_CONF=/d' /etc/vps-mcp/host.env; \
+	printf 'BIND_ZONE_DIR=%s\nBIND_CONF=%s\n' "$$BIND_ZONE_DIR" "$$BIND_CONF" >> /etc/vps-mcp/host.env; \
+	test -f $$BIND_CONF || echo "// No zones yet — make <domain>.dnsdone adds them." > $$BIND_CONF
+	systemctl enable --now named
+	@echo "BIND is up. If firewalld is still running, open DNS:"
+	@echo "    firewall-cmd --permanent --add-service=dns && firewall-cmd --reload"
+	@touch $@
 
 %.setupdone:
 	$(eval _IP := $*)
@@ -98,24 +133,13 @@ help:
 	if command -v apt-get >/dev/null 2>&1; then \
 	    apt-get update; \
 	    apt-get upgrade -y; \
-	    apt-get install -y bind9 podman golang-go postfix opendkim opendkim-tools unattended-upgrades; \
-	    BIND_ZONE_DIR=/etc/bind/zones; \
-	    BIND_CONF=/etc/bind/named.conf.local; \
+	    apt-get install -y podman golang-go postfix opendkim opendkim-tools unattended-upgrades; \
 	elif command -v dnf >/dev/null 2>&1; then \
 	    dnf install -y epel-release || dnf install -y "https://dl.fedoraproject.org/pub/epel/epel-release-latest-$$(rpm -E %rhel).noarch.rpm"; \
 	    dnf upgrade -y; \
-	    dnf install -y bind bind-utils podman golang postfix opendkim opendkim-tools dnf-automatic; \
-	    BIND_ZONE_DIR=/var/named; \
-	    mkdir -p /etc/named; \
-	    BIND_CONF=/etc/named/named.conf.local; \
-	    install -m 644 host/bind/named.conf.tmpl /etc/named.conf; \
-	else echo "Error: no supported package manager (apt-get or dnf)"; exit 1; fi; \
-	mkdir -p $$BIND_ZONE_DIR $$(dirname $$BIND_CONF)/zones.d; \
-	sed -i -e '/^BIND_ZONE_DIR=/d' -e '/^BIND_CONF=/d' /etc/vps-mcp/host.env; \
-	printf 'BIND_ZONE_DIR=%s\nBIND_CONF=%s\n' "$$BIND_ZONE_DIR" "$$BIND_CONF" >> /etc/vps-mcp/host.env; \
-	test -f $$BIND_CONF || echo "// No zones yet — make <domain>.dnsdone adds them." > $$BIND_CONF
-	touch /etc/vps-mcp/domains
-	systemctl enable --now named
+	    dnf install -y podman golang postfix opendkim opendkim-tools dnf-automatic; \
+	else echo "Error: no supported package manager (apt-get or dnf)"; exit 1; fi
+	$(MAKE) $(_IP).dnssetupdone
 	mkdir -p /etc/opendkim/keys; \
 	touch /etc/opendkim/KeyTable /etc/opendkim/SigningTable; \
 	chgrp opendkim /etc/opendkim/KeyTable /etc/opendkim/SigningTable; \
