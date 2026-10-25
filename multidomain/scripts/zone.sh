@@ -124,11 +124,33 @@ apply)
     tmp=$(mktemp "$BIND_ZONE_DIR/.$D.zone.XXXXXX")
     trap 'rm -f "$owners" "$tmp"' EXIT
     {
+        # A record set in the records file replaces the template's: @ A, * A,
+        # and the SPF (@, *) / DMARC TXT records, matched by owner + kind.
+        # Other TXT records (site verification etc.) never replace anything.
         sed -e "s|__IP__|$IP|g" \
             -e "s|__DOMAIN__|$D|g" \
             -e "s|__NS1__|${NS1:-ns1.$D}|g" \
             -e "s|__SERIAL__|$serial|g" \
-            host/bind/zone.tmpl
+            host/bind/zone.tmpl |
+        awk -v d="$D" '
+            function key(line,   f, n, i, o, t) {
+                if (line ~ /^[ \t;$]/ || line ~ /^$/) return ""
+                n = split(line, f, /[ \t]+/); o = tolower(f[1])
+                if (o == d ".") o = "@"
+                else if (substr(o, length(o) - length(d) - 1) == "." d ".") o = substr(o, 1, length(o) - length(d) - 2)
+                for (i = 2; i <= n; i++) {
+                    t = toupper(f[i])
+                    if (t ~ /^[0-9]+$/ || t == "IN") continue
+                    break
+                }
+                if (t == "A") return o " A"
+                if (t == "TXT" && line ~ /"v=spf1/)   return o " SPF"
+                if (t == "TXT" && line ~ /"v=DMARC1/) return o " DMARC"
+                return ""
+            }
+            NR == FNR { k = key($0); if (k != "") over[k] = 1; next }
+            { k = key($0); if (k == "" || !over[k]) print }
+        ' "$SRC" -
         echo
         echo "; ── DKIM (host-managed) ──"
         cat /etc/opendkim/keys/"$D"/mail.txt

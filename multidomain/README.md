@@ -109,8 +109,14 @@ The zone is built from two parts:
 
 | Part | Source | Contents |
 |---|---|---|
-| Host-managed | `host/bind/zone.tmpl` + DKIM key | SOA, NS, `@` / `*` / `ns1` A, SPF, DMARC, `mail._domainkey` |
+| Host-managed | `host/bind/zone.tmpl` + DKIM key | SOA, NS, `ns1` A, `mail._domainkey` |
+| Host defaults | `host/bind/zone.tmpl` | `@` / `*` A (this server), `@` / `*` SPF, `_dmarc` (`p=none`) |
 | Operator-managed | `<domain>.dns` | everything else (MX, verification TXT, CNAME, ...) |
+
+A host default is dropped when `<domain>.dns` has the same kind of record:
+`@ IN A` (e.g. the apex stays on another server or GitHub Pages), `* IN A`,
+a `v=spf1` TXT at `@` or `*` (keep an existing SPF), or a `v=DMARC1` TXT at
+`_dmarc`. Other TXT records (site verification etc.) never replace anything.
 
 `make <domain>.dnsdone` re-runs only when `<domain>.dns` changed. It rejects SOA/NS
 records, `$` directives, owner-less lines, anything under `mail._domainkey`, and
