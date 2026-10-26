@@ -43,7 +43,7 @@
  */
 
 import crypto from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import fs from "node:fs/promises";
@@ -60,6 +60,9 @@ const execFileAsync = promisify(execFile);
 const SUBDOMAIN     = process.env.SUBDOMAIN     || "localhost";
 const MAIL_DOMAIN   = process.env.MAIL_DOMAIN   || SUBDOMAIN;
 const NOTIFY_EMAIL  = process.env.NOTIFY_EMAIL  || "";
+// ROLE is "dev" for the development container of a create3 set, empty for a
+// standalone container (staging/prod of a set run no MCP server at all).
+const ROLE          = process.env.ROLE          || "";
 const OAUTH_BASE    = (process.env.OAUTH_BASE   || "").replace(/\/+$/, "");
 const GH_CLIENT_ID     = process.env.GITHUB_CLIENT_ID     || "";
 const GH_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || "";
@@ -103,12 +106,36 @@ const USAGE_POLICY =
   "to another session. Treat any resource you cannot be sure you created in " +
   "this session as belonging to another session.";
 
+// nginx layout: the MCP locations live in mcp.d/ and each application owns
+// one file in app.d/, so adding an app never rewrites another app's (or the
+// MCP's) configuration from a stale copy. Only stated where the layout exists
+// (containers created before it keep everything in vps-mcp.conf).
+const NGINX_POLICY = !existsSync("/etc/nginx/app.d") ? "" :
+  "\n\nnginx: put an application's configuration only in " +
+  "/etc/nginx/app.d/<application>.conf (location blocks, included inside the " +
+  "server block). Do not edit /etc/nginx/conf.d/vps-mcp.conf, /etc/nginx/mcp.d/ " +
+  "or another application's file in app.d/.";
+
+// 3-container model (ROLE=dev): this container is the development server of a
+// production/staging/development trio. Production and staging have no MCP and
+// are updated only by a person running make on the host.
+const DEV_MODEL =
+  `\n\nThis is the DEVELOPMENT container of a three-container set ` +
+  `(production / staging / development). You cannot reach production or ` +
+  `staging; a person deploys them from the host. Work in the git repository ` +
+  `/srv/app and read /srv/app/CLAUDE.md first. Commit your work: only ` +
+  `committed HEAD is sent to staging. staging/main and production/main are ` +
+  `set by the host and show what each server runs; never move them. The ` +
+  `staging filesystem is visible read-only at /mnt/staging, and copies of ` +
+  `mail sent by staging arrive in /srv/stg-mail/ (one .eml per message).`;
+
 // Line appended to tool descriptions so Claude can tell which host this
 // connector is bound to — guarding against acting on the wrong VPS. One
 // container serves exactly one subdomain, so the subdomain alone identifies it.
 // Also carries the shared-use USAGE_POLICY above.
 function hostInfoLine() {
-  return `\nThis connector is bound to the VPS ${SUBDOMAIN}.` + USAGE_POLICY;
+  return `\nThis connector is bound to the VPS ${SUBDOMAIN}.` + NGINX_POLICY +
+    (ROLE === "dev" ? DEV_MODEL : "") + USAGE_POLICY;
 }
 
 // ── GitHub OIDC verification (for /deploy) ────────────────────────────────────

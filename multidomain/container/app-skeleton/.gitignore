@@ -1,0 +1,2 @@
+# Per-environment secrets and runtime data never belong in this repository:
+# they are placed by hand on each server (see REQUIRED_LOCAL in the Makefile).

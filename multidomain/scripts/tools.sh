@@ -21,4 +21,7 @@ ps       procps-ng
 lsof     lsof
 sqlite3  sqlite
 jq       jq
+git      git-core
+make     make
+rsync    rsync
 '

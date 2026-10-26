@@ -13,10 +13,19 @@
 # sender gets an immediate, permanent error. The per-minute rate limit is
 # done by Postfix anvil (smtpd_client_message_rate_limit), not here.
 #
+# Staging containers of a create3 set (container name *-staging.<domain>-web or
+# staging.<domain>-web, looked up by client address in /run/vps-mcp/containers)
+# additionally get "BCC stgcapture+<name>@localhost": the message is still
+# delivered normally, and a copy lands in /var/spool/vps-mcp-stgmail/ for
+# vps-mcp-stgmail.path to hand to the matching dev container. The decision is
+# made here, before queueing, so no copy of any other container's mail (e.g.
+# production mail with customer data) is ever written on the host.
+#
 # State: $STATE_DIR/<client_address> containing "YYYYMMDD COUNT".
 
 MAILQUOTA_DAILY=${MAILQUOTA_DAILY:-200}
 STATE_DIR=${STATE_DIR:-/var/lib/vps-mcp-mailquota}
+CONTAINERS=${CONTAINERS:-/run/vps-mcp/containers}
 
 decide() {
     case $1 in
@@ -34,7 +43,11 @@ decide() {
             echo "action=REJECT 5.7.1 Daily mail quota ($MAILQUOTA_DAILY messages) exceeded for $1"
         else
             echo "$today $((count + 1))" > "$f.tmp" && mv "$f.tmp" "$f"
-            echo "action=DUNNO"
+            name=$(awk -F '\t' -v ip="$1" '$2 == ip { print $1; exit }' "$CONTAINERS" 2>/dev/null)
+            case $name in
+                *-staging.*-web|staging.*-web) echo "action=BCC stgcapture+$name@localhost" ;;
+                *) echo "action=DUNNO" ;;
+            esac
         fi
     ) 9>>"$f.lock"
 }

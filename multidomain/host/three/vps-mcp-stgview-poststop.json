@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "hook": {
+    "path": "/usr/local/libexec/vps-mcp-stgview-hook.sh",
+    "args": ["vps-mcp-stgview-hook.sh", "poststop"]
+  },
+  "when": { "always": true },
+  "stages": ["poststop"]
+}

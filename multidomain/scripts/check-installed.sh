@@ -203,6 +203,18 @@ check_pair host/systemd/vps-mcp-reboot.timer   /etc/systemd/system/vps-mcp-reboo
 # ── nftables ─────────────────────────────────────────────────────────────────
 check_pair host/nftables/vps-mcp.nft.tmpl      /etc/nftables.d/vps-mcp.nft        render_nft
 
+# ── three-container sets (install-services) ─────────────────────────────────
+for _f in vps-mcp-containers.sh vps-mcp-stgmail-forward.sh vps-mcp-stgview-hook.sh vps-mcp-view-setup.sh; do
+    check_pair host/three/$_f /usr/local/libexec/$_f
+done
+for _f in vps-mcp-stgview-poststart.json vps-mcp-stgview-poststop.json; do
+    check_pair host/three/$_f /usr/share/containers/oci/hooks.d/$_f
+done
+for _f in vps-mcp-containers.service vps-mcp-view.service vps-mcp-stgmail.path \
+          vps-mcp-stgmail.service vps-mcp-stgmail-retry.service vps-mcp-stgmail-retry.timer; do
+    check_pair host/systemd/$_f /etc/systemd/system/$_f
+done
+
 # ── opendkim ────────────────────────────────────────────────────────────────
 check_pair host/postfix/vps-mcp-mailquota.sh   /usr/local/libexec/vps-mcp-mailquota.sh
 check_pair host/opendkim/opendkim.conf.tmpl   /etc/opendkim.conf
@@ -306,6 +318,21 @@ if command -v podman >/dev/null 2>&1; then
         # vps-mcp.conf: replay the server_name substitution and normalise the
         # ssl_certificate* lines on both sides (see render_vhost / norm_cert).
         check_in_container "$c" container/nginx/vps-mcp.conf        /etc/nginx/conf.d/vps-mcp.conf render_vhost norm_cert orig
+        # mcp.d/ + app.d/ layout. A container created before it keeps every
+        # location in vps-mcp.conf (reported DIFFER above); see README
+        # "Migrating an existing container's nginx configuration".
+        role=$(podman exec "$c" sed -n 's/^ROLE=//p' /etc/vps-mcp-env 2>/dev/null)
+        if podman exec "$c" test -d /etc/nginx/mcp.d 2>/dev/null; then
+            case $role in
+                staging|prod) echo "OK       $c: no MCP (ROLE=$role)" ;;
+                *) check_in_container "$c" container/nginx/mcp.conf /etc/nginx/mcp.d/mcp.conf ;;
+            esac
+        else
+            echo "NOTE     $c: old nginx layout (no /etc/nginx/mcp.d, app.d)"
+        fi
+        if [ -n "$role" ]; then
+            check_in_container "$c" container/systemd/vps-mcp-recv.sh /usr/local/bin/vps-mcp-recv.sh
+        fi
 
         # Diagnostic tools (ss/ps/lsof/sqlite3/jq). A container created from an
         # image built before they were added carries none of them; the

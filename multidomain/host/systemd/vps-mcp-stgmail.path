@@ -1,0 +1,9 @@
+[Unit]
+Description=vps-mcp: watch for staging mail copies
+Documentation=https://github.com/paijp/vps-subdomain-mcp
+
+[Path]
+DirectoryNotEmpty=/var/spool/vps-mcp-stgmail/new
+
+[Install]
+WantedBy=multi-user.target

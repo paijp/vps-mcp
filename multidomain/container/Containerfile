@@ -8,6 +8,8 @@ FROM rockylinux:10
 # Red Hat's security team through the AppStream / BaseOS / EPEL channels.
 # iproute / procps-ng / lsof / sqlite / jq are the everyday tools exec_command
 # reaches for (ss, ps, lsof, sqlite3, jq); a minimal image ships none of them.
+# git / make / rsync carry the create3 deploy flow (bundle transfer, make
+# install, rsync into place) and are handy in any container.
 # Keep this list in sync with ../scripts/tools.sh, which drives the same install
 # for already-running containers (make mcpupdate) and the `make check` report.
 RUN dnf install -y epel-release \
@@ -27,6 +29,9 @@ RUN dnf install -y epel-release \
         lsof \
         sqlite \
         jq \
+        git-core \
+        make \
+        rsync \
     && dnf clean all
 
 # ── Disable unwanted units ────────────────────────────────────────────────────
@@ -70,6 +75,10 @@ RUN mkdir -p /etc/nginx/ssl \
 # conflicts with ours) with a clean version that only includes conf.d/.
 COPY nginx/nginx.conf     /etc/nginx/nginx.conf
 COPY nginx/vps-mcp.conf   /etc/nginx/conf.d/vps-mcp.conf
+# The HTTPS server block includes mcp.d/ (MCP locations; emptied by
+# vps-mcp-init.sh on staging/prod) and app.d/ (one file per application).
+COPY nginx/mcp.conf          /etc/nginx/mcp.d/mcp.conf
+COPY nginx/app-default.conf  /etc/nginx/app.d/default.conf
 
 # ── Postfix nullclient ────────────────────────────────────────────────────────
 # myhostname is set by vps-mcp-init.sh at runtime.
@@ -97,9 +106,13 @@ COPY mcp/index.mjs /opt/mcp/index.mjs
 COPY systemd/mcp-server.service    /etc/systemd/system/mcp-server.service
 COPY systemd/vps-mcp-init.sh       /usr/local/bin/vps-mcp-init.sh
 COPY systemd/certbot-deploy.sh     /usr/local/bin/certbot-deploy.sh
+COPY systemd/vps-mcp-recv.sh       /usr/local/bin/vps-mcp-recv.sh
+# Skeleton of /srv/app for the dev container of a create3 set.
+COPY app-skeleton/                 /usr/local/share/vps-mcp/app-skeleton/
 
 RUN chmod +x /usr/local/bin/vps-mcp-init.sh \
-             /usr/local/bin/certbot-deploy.sh
+             /usr/local/bin/certbot-deploy.sh \
+             /usr/local/bin/vps-mcp-recv.sh
 
 RUN systemctl enable \
     nginx \

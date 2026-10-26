@@ -11,6 +11,13 @@ OAUTH_HOST ?= $(shell grep '^OAUTH_HOST=' /etc/vps-mcp/host.env 2>/dev/null | cu
 fqdn_of  = $(word 1,$(subst __, ,$(1)))
 email_of = $(word 2,$(subst __, ,$(1)))
 
+# A literal comma, for $(call ...) arguments that contain one.
+, := ,
+
+# names3 FQDN — set _P, _S, _D to the production / staging / dev hostnames of
+# the create3 set whose production hostname is FQDN (see scripts/names3.sh).
+names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1,$(_N)))$(eval _S := $(word 2,$(_N)))$(eval _D := $(word 3,$(_N)))
+
 .DEFAULT_GOAL := help
 .PHONY: help image install-binaries install-services list domains mcpupdate check checkall
 
@@ -43,11 +50,19 @@ help:
 	@printf "  make test.ksy.jp__alice@ex.com.done    VPS for alice at test.ksy.jp\n"
 	@printf "  make pa-i.jp__bob@ex.com.done          VPS for bob at the domain apex\n"
 	@printf "  make list                              List VPS containers by domain\n\n"
+	@printf "Three-container sets (production / staging / development):\n"
+	@printf "  make shop.ksy.jp__alice@ex.com.create3 shop.ksy.jp (prod), shop-staging.ksy.jp,\n"
+	@printf "                                         shop-dev.ksy.jp (the only one with MCP)\n"
+	@printf "  make shop.ksy.jp.to-stg                Send dev's committed HEAD to staging, make install\n"
+	@printf "  make shop.ksy.jp.to-prod               Show the full diff, ask, send staging's HEAD to prod\n"
+	@printf "  make shop.ksy.jp.list3                 Status and git HEAD of the three containers\n"
+	@printf "      For a domain apex (ksy.jp) the others are staging.ksy.jp and dev.ksy.jp.\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
-	@printf "  make mcpupdate            Update ALL running containers in place (stop + cp + npm install + start,\n"
+	@printf "  make mcpupdate            Update ALL running MCP containers in place (stop + cp + npm install + start,\n"
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
-	@printf "  make test.ksy.jp.mcpupdate  Update a single running container (stem -> <stem>-web)\n"
+	@printf "  make test.ksy.jp.mcpupdate  Update a single running container (stem -> <stem>-web;\n"
+	@printf "                            for a create3 set its dev container; staging is skipped)\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
 	@printf "Check installed files against this checkout:\n"
 	@printf "  make check\n"
@@ -252,6 +267,32 @@ install-services:
 	postconf -e "smtpd_client_recipient_rate_limit = 20"
 	postconf -e "smtpd_client_event_limit_exceptions ="
 	postconf -e "smtpd_end_of_data_restrictions = check_policy_service unix:private/vps-mcp-mailquota"
+	# Three-container sets (create3). Harmless on a host without any:
+	#   - vps-mcp-containers: name/IP list for the mail policy (staging lookup)
+	#   - staging mail copies: the policy BCCs stgcapture+<staging>@localhost;
+	#     the alias drops them in a Maildir, vps-mcp-stgmail.path hands them to
+	#     the dev container (recipient_delimiter makes the +<staging> part work)
+	#   - staging view: an OCI hook binds each staging rootfs read-only under
+	#     /run/vps-mcp/view, set up at boot by vps-mcp-view.service
+	command -v jq >/dev/null 2>&1 || dnf install -y jq
+	install -m 755 host/three/vps-mcp-containers.sh      /usr/local/libexec/vps-mcp-containers.sh
+	install -m 755 host/three/vps-mcp-stgmail-forward.sh /usr/local/libexec/vps-mcp-stgmail-forward.sh
+	install -m 755 host/three/vps-mcp-stgview-hook.sh    /usr/local/libexec/vps-mcp-stgview-hook.sh
+	install -m 755 host/three/vps-mcp-view-setup.sh      /usr/local/libexec/vps-mcp-view-setup.sh
+	install -d -m 755 /usr/share/containers/oci/hooks.d
+	install -m 644 host/three/vps-mcp-stgview-poststart.json /usr/share/containers/oci/hooks.d/
+	install -m 644 host/three/vps-mcp-stgview-poststop.json  /usr/share/containers/oci/hooks.d/
+	for u in vps-mcp-containers.service vps-mcp-view.service vps-mcp-stgmail.path \
+	         vps-mcp-stgmail.service vps-mcp-stgmail-retry.service vps-mcp-stgmail-retry.timer; do \
+	    install -m 644 host/systemd/$$u /etc/systemd/system/; \
+	done
+	install -d -m 755 -o nobody -g nobody /var/spool/vps-mcp-stgmail
+	grep -q '^stgcapture:' /etc/aliases || echo 'stgcapture: /var/spool/vps-mcp-stgmail/' >> /etc/aliases
+	newaliases
+	postconf -e "recipient_delimiter = +"
+	systemctl daemon-reload
+	systemctl enable --now vps-mcp-containers.service vps-mcp-view.service \
+	    vps-mcp-stgmail.path vps-mcp-stgmail-retry.timer
 	systemctl reload postfix
 
 # ── sshsec.done — optional SSH hardening ──────────────────────────────────────
@@ -334,6 +375,45 @@ domains:
 # learns OAUTH_BASE (https://$(OAUTH_HOST)) and grants a Bearer when the GitHub
 # login's verified primary email matches NOTIFY_EMAIL.
 
+# podman_run FQDN EMAIL EXTRA — create <FQDN>-web with the options every
+# container shares (%.done and %.create3).
+podman_run = podman run -d \
+    --name     $(1)-web \
+    --hostname $(1) \
+    --network  vpsmcp-net \
+    --systemd  always \
+    --restart  always \
+    --memory   1g \
+    --pids-limit 200 \
+    --cap-drop NET_RAW,NET_ADMIN \
+    --env      SUBDOMAIN=$(1) \
+    --env      MAIL_DOMAIN=$(1) \
+    --env      NOTIFY_EMAIL=$(2) \
+    $(3) \
+    $(IMAGE)
+
+# wait_proxy FQDN — wait until the proxy routes the HTTP-01 path to FQDN.
+define wait_proxy
+	@echo "Waiting for the proxy to route the HTTP-01 path to $(1)..."
+	@for i in $$(seq 60); do \
+	    code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+	        --resolve $(1):80:$(IP) \
+	        http://$(1)/.well-known/acme-challenge/ping 2>/dev/null || true); \
+	    if [ "$$code" = "404" ] || [ "$$code" = "200" ]; then \
+	        echo "proxy ready (HTTP $$code) after $$i attempt(s)"; break; \
+	    fi; \
+	    sleep 2; \
+	done
+endef
+
+# check_fqdn FQDN — FQDN must be a registered domain or one label below one.
+define check_fqdn
+	@d=$$(awk -v h="$(1)" '(h == $$0 || substr(h, length(h) - length($$0)) == "." $$0) && length($$0) > length(best) { best = $$0 } END { print best }' /etc/vps-mcp/domains 2>/dev/null); \
+	test -n "$$d" || { echo "Error: $(1) is in no registered domain.  Run make <domain>.dnsdone first."; exit 1; }; \
+	h="$(1)"; sub=$${h%"$$d"}; sub=$${sub%.}; \
+	case "$$sub" in *.*) echo "Error: $(1) is more than one label below $$d."; exit 1;; esac
+endef
+
 %.done:
 	$(eval _FQDN  := $(shell echo '$(call fqdn_of,$*)' | tr A-Z a-z))
 	$(eval _EMAIL := $(call email_of,$*))
@@ -342,10 +422,7 @@ domains:
 	    { echo "Error: format is  <hostname>__<email>.done  e.g. test.ksy.jp__alice@gmail.com.done"; exit 1; }
 	@test -n "$(IP)" || \
 	    { echo "Error: IP not set.  Run make <IP>.setupdone first."; exit 1; }
-	@d=$$(awk -v h="$(_FQDN)" '(h == $$0 || substr(h, length(h) - length($$0)) == "." $$0) && length($$0) > length(best) { best = $$0 } END { print best }' /etc/vps-mcp/domains 2>/dev/null); \
-	test -n "$$d" || { echo "Error: $(_FQDN) is in no registered domain.  Run make <domain>.dnsdone first."; exit 1; }; \
-	h="$(_FQDN)"; sub=$${h%"$$d"}; sub=$${sub%.}; \
-	case "$$sub" in *.*) echo "Error: $(_FQDN) is more than one label below $$d."; exit 1;; esac
+	$(call check_fqdn,$(_FQDN))
 	@test -z "$(_OAUTH)" || test -f /etc/vps-mcp/oauth.env || \
 	    { echo "Error: create /etc/vps-mcp/oauth.env (mode 600) with GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET before making the oauth container."; exit 1; }
 	@test -z "$(_OAUTH)" || test -z "$(OAUTH_HOST)" || test "$(OAUTH_HOST)" = "$(_FQDN)" || \
@@ -353,35 +430,143 @@ domains:
 	@test -n "$(_OAUTH)" || test -n "$(OAUTH_HOST)" || \
 	    { echo "Error: no GitHub-login broker yet.  Create it first: make oauth.<domain>__<email>.done"; exit 1; }
 	$(if $(_OAUTH),sed -i '/^OAUTH_HOST=/d' /etc/vps-mcp/host.env && echo "OAUTH_HOST=$(_FQDN)" >> /etc/vps-mcp/host.env)
-	podman run -d \
-	    --name     $(_FQDN)-web \
-	    --hostname $(_FQDN) \
-	    --network  vpsmcp-net \
-	    --systemd  always \
-	    --restart  always \
-	    --memory   1g \
-	    --pids-limit 200 \
-	    --cap-drop NET_RAW,NET_ADMIN \
-	    --env      SUBDOMAIN=$(_FQDN) \
-	    --env      MAIL_DOMAIN=$(_FQDN) \
-	    --env      NOTIFY_EMAIL=$(_EMAIL) \
-	    --env      OAUTH_BASE=https://$(if $(_OAUTH),$(_FQDN),$(OAUTH_HOST)) \
-	    $(if $(_OAUTH),--env-file /etc/vps-mcp/oauth.env,) \
-	    $(IMAGE)
+	$(call podman_run,$(_FQDN),$(_EMAIL),--env OAUTH_BASE=https://$(if $(_OAUTH),$(_FQDN),$(OAUTH_HOST)) $(if $(_OAUTH),--env-file /etc/vps-mcp/oauth.env,))
 	@echo "Letting the proxy refresh its routing table for the new container..."
 	@sleep 10
-	@echo "Waiting for the proxy to route the HTTP-01 path to $(_FQDN)..."
-	@for i in $$(seq 60); do \
-	    code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
-	        --resolve $(_FQDN):80:$(IP) \
-	        http://$(_FQDN)/.well-known/acme-challenge/ping 2>/dev/null || true); \
-	    if [ "$$code" = "404" ] || [ "$$code" = "200" ]; then \
-	        echo "proxy ready (HTTP $$code) after $$i attempt(s)"; break; \
-	    fi; \
-	    sleep 2; \
-	done
+	$(call wait_proxy,$(_FQDN))
 	podman exec $(_FQDN)-web /usr/local/bin/vps-mcp-init.sh
 	@touch $@
+
+# ── three-container sets ──────────────────────────────────────────────────────
+# Usage: make shop.ksy.jp__alice@gmail.com.create3
+#        make shop.ksy.jp.to-stg
+#        make shop.ksy.jp.to-prod
+#        make shop.ksy.jp.list3
+#
+# One application gets three containers (stem = production hostname):
+#   shop.ksy.jp          production   no MCP   ROLE=prod
+#   shop-staging.ksy.jp  staging      no MCP   ROLE=staging
+#   shop-dev.ksy.jp      development  MCP      ROLE=dev
+# (for a domain apex ksy.jp: staging.ksy.jp and dev.ksy.jp). Claude works only
+# in the dev container and commits to its /srv/app; a person on the host sends
+# that commit to staging (to-stg), then staging's commit to production
+# (to-prod), and each runs `make -C /srv/app install` there. Claude's trial and
+# error therefore never reaches production. The dev container also sees the
+# staging filesystem read-only at /mnt/staging (OCI hook, see install-services)
+# and copies of staging's outgoing mail in /srv/stg-mail.
+#
+# After every transfer the dev repository records refs/remotes/staging/main and
+# refs/remotes/production/main, so Claude can tell what each server runs.
+
+%.create3:
+	$(call names3,$(call fqdn_of,$*))
+	$(eval _EMAIL := $(call email_of,$*))
+	@test -n "$(_EMAIL)" || \
+	    { echo "Error: format is  <production hostname>__<email>.create3  e.g. shop.ksy.jp__alice@gmail.com.create3"; exit 1; }
+	@test -n "$(IP)" || \
+	    { echo "Error: IP not set.  Run make <IP>.setupdone first."; exit 1; }
+	@test -n "$(OAUTH_HOST)" || \
+	    { echo "Error: no GitHub-login broker yet.  Create it first: make oauth.<domain>__<email>.done"; exit 1; }
+	$(call check_fqdn,$(_P))
+	$(call check_fqdn,$(_S))
+	$(call check_fqdn,$(_D))
+	@for c in $(_P) $(_S) $(_D); do \
+	    ! podman container exists $$c-web || { echo "Error: container $$c-web already exists."; exit 1; }; \
+	done
+	@systemctl is-active --quiet vps-mcp-view.service || \
+	    { echo "Error: vps-mcp-view.service is not active.  Run make install-services first."; exit 1; }
+	mkdir -p /run/vps-mcp/view/$(_S)
+	$(call podman_run,$(_P),$(_EMAIL),--env ROLE=prod)
+	$(call podman_run,$(_S),$(_EMAIL),--env ROLE=staging)
+	$(call podman_run,$(_D),$(_EMAIL),--env ROLE=dev --env OAUTH_BASE=https://$(OAUTH_HOST) -v /run/vps-mcp/view/$(_S):/mnt/staging:ro$(,)rslave)
+	@echo "Letting the proxy refresh its routing table for the new containers..."
+	@sleep 10
+	$(call wait_proxy,$(_P))
+	$(call wait_proxy,$(_S))
+	$(call wait_proxy,$(_D))
+	podman exec $(_P)-web /usr/local/bin/vps-mcp-init.sh
+	podman exec $(_S)-web /usr/local/bin/vps-mcp-init.sh
+	podman exec $(_D)-web /usr/local/bin/vps-mcp-init.sh
+	@$(MAKE) --no-print-directory $(_P).to-stg
+	@$(MAKE) --no-print-directory $(_P).to-prod YES=1
+	@touch $@
+
+# Send dev's committed HEAD to staging and install it there. Staging follows
+# whatever is sent (it may move backwards, e.g. a hotfix branched from
+# production/main), but stops if staging's /srv/app was edited by hand.
+%.to-stg:
+	$(call names3,$*)
+	@set -e; \
+	for c in $(_D) $(_S); do \
+	    podman container exists $$c-web || { echo "Error: container $$c-web not found."; exit 1; }; \
+	done; \
+	if [ -n "$$(podman exec $(_D)-web git -C /srv/app status --porcelain)" ]; then \
+	    echo "Error: $(_D) has uncommitted changes in /srv/app (only committed HEAD is sent):"; \
+	    podman exec $(_D)-web git -C /srv/app status --short; \
+	    echo "Ask Claude to commit (or discard) them first."; exit 1; \
+	fi; \
+	echo "==> $(_D)-web  ->  $(_S)-web"; \
+	h=$$(podman exec $(_D)-web git -C /srv/app bundle create -q - HEAD \
+	     | podman exec -i $(_S)-web /usr/local/bin/vps-mcp-recv.sh staging); \
+	podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/staging/main $$h; \
+	echo "    staging/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
+	echo "==> make install on $(_S)-web"; \
+	podman exec $(_S)-web make -C /srv/app install
+
+# Send staging's HEAD to production and install it there, after showing every
+# commit and the full diff that production will receive and asking for
+# confirmation (YES=1 skips the question; create3 uses it for the skeleton).
+# Production only fast-forwards and stops if its /srv/app was edited by hand.
+%.to-prod:
+	$(call names3,$*)
+	@set -e; \
+	for c in $(_D) $(_S) $(_P); do \
+	    podman container exists $$c-web || { echo "Error: container $$c-web not found."; exit 1; }; \
+	done; \
+	sh=$$(podman exec $(_S)-web git -C /srv/app rev-parse HEAD); \
+	ph=$$(podman exec $(_P)-web git -C /srv/app rev-parse -q --verify HEAD || true); \
+	dh=$$(podman exec $(_D)-web git -C /srv/app rev-parse HEAD); \
+	if [ "$$sh" = "$$ph" ]; then echo "Production already runs staging's HEAD; nothing to deploy."; exit 0; fi; \
+	if [ "$$dh" != "$$sh" ]; then \
+	    echo "== Note: dev has commits that are not on staging (NOT deployed):"; \
+	    podman exec $(_D)-web git -C /srv/app log --oneline $$sh..$$dh || true; \
+	fi; \
+	if [ -n "$$ph" ]; then \
+	    echo "== commits going to production:"; \
+	    podman exec $(_S)-web git -C /srv/app log --oneline $$ph..HEAD || \
+	        { echo "Error: production's HEAD is not in staging's history."; exit 1; }; \
+	    echo "== diff:"; \
+	    podman exec $(_S)-web git -C /srv/app --no-pager diff $$ph HEAD; \
+	else \
+	    echo "== first deploy to $(_P)"; \
+	fi; \
+	if [ "$(YES)" != 1 ]; then \
+	    printf 'Deploy to %s? [y/N] ' "$(_P)"; read a; \
+	    [ "$$a" = y ] || { echo "aborted"; exit 1; }; \
+	fi; \
+	echo "==> $(_S)-web  ->  $(_P)-web"; \
+	h=$$(podman exec $(_S)-web git -C /srv/app bundle create -q - HEAD \
+	     | podman exec -i $(_P)-web /usr/local/bin/vps-mcp-recv.sh prod); \
+	podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/production/main $$h; \
+	echo "    production/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
+	echo "==> make install on $(_P)-web"; \
+	podman exec $(_P)-web make -C /srv/app install
+
+# Status and git HEAD of the three containers, then dev's recent history with
+# the staging/main and production/main markers.
+%.list3:
+	$(call names3,$*)
+	@for c in $(_P) $(_S) $(_D); do \
+	    if podman container exists $$c-web; then \
+	        st=$$(podman inspect -f '{{.State.Status}}' $$c-web); \
+	        hd=$$(podman exec $$c-web git -C /srv/app log -1 --format='%h %s' 2>/dev/null || echo '-'); \
+	        printf '%-40s %-9s %s\n' "$$c-web" "$$st" "$$hd"; \
+	    else \
+	        printf '%-40s (missing)\n' "$$c-web"; \
+	    fi; \
+	done; \
+	echo; \
+	podman exec $(_D)-web git -C /srv/app log --oneline --decorate --all -10 2>/dev/null || true
 
 # ── list ──────────────────────────────────────────────────────────────────────
 
@@ -418,7 +603,13 @@ mcpupdate:
 	cs="$$(podman ps --filter name=-web --format '{{.Names}}')"; \
 	test -n "$$cs" || { echo "No running -web containers found."; exit 0; }; \
 	for c in $$cs; do \
-	    $(MAKE) --no-print-directory $${c%-web}.mcpupdate; \
+	    h=$${c%-web}; \
+	    : 'Staging/production of a create3 set run no MCP server; the set is'; \
+	    : 'updated through its dev container, which this loop also visits.'; \
+	    case $$h in *-staging.*|staging.*) continue ;; esac; \
+	    d=$$(sh scripts/names3.sh $$h | cut -d' ' -f3); \
+	    podman container exists $$d-web && continue; \
+	    $(MAKE) --no-print-directory $$h.mcpupdate; \
 	done
 
 # ── check installed files vs this checkout ───────────────────────────────────
@@ -451,6 +642,12 @@ checkall:
 %.mcpupdate:
 	@set -e; \
 	c="$*-web"; \
+	case "$*" in *-staging.*|staging.*) echo "$$c: staging container (no MCP); skipped."; exit 0 ;; esac; \
+	d=$$(sh scripts/names3.sh $* | cut -d' ' -f3); \
+	if podman container exists $$d-web; then \
+	    echo "$$c is the production container of a create3 set; updating its dev container $$d-web."; \
+	    c="$$d-web"; \
+	fi; \
 	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
 	echo "==> updating $$c"; \
 	podman exec $$c systemctl stop mcp-server; \

@@ -1,0 +1,12 @@
+[Unit]
+Description=vps-mcp: shared read-only view root for staging containers
+Documentation=https://github.com/paijp/vps-subdomain-mcp
+Before=podman-restart.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/vps-mcp-view-setup.sh
+
+[Install]
+WantedBy=multi-user.target

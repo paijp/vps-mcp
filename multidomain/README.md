@@ -36,14 +36,20 @@ Internet
 
 ```
 proxy/
-  cmd/list-containers/   setuid-root binary — container name/IP discovery
+  cmd/list-containers/   container name/IP discovery (run as root by the proxy units)
   cmd/vps-proxy/         TLS SNI passthrough proxy (port 443)
   cmd/vps-proxy-http/    HTTP reverse proxy (port 80)
   mapping/               hostname → container-name mapping, domain list
   routes/                live routing table (refreshed every 5 s)
   sni/                   TLS ClientHello SNI parser
-container/               same image as the subdomain edition
+container/
+  nginx/vps-mcp.conf     server blocks; includes mcp.d/ (MCP) and app.d/ (one file per app)
+  nginx/mcp.conf         MCP locations → /etc/nginx/mcp.d/mcp.conf
+  nginx/app-default.conf default "location /" → /etc/nginx/app.d/default.conf
+  app-skeleton/          /srv/app of a create3 dev container (CLAUDE.md, Makefile, files/)
+  systemd/vps-mcp-recv.sh  receives a git bundle into /srv/app (to-stg / to-prod)
 host/
+  three/                          create3 host side: staging view hook, mail copies, name list
   bind/zone.tmpl                  host-managed part of every zone
   bind/named.conf.local.tmpl      per-zone statement (installed in zones.d/)
   opendkim/opendkim.conf.tmpl     KeyTable/SigningTable (one key per domain)
@@ -51,6 +57,7 @@ host/
   nftables/vps-mcp.nft.tmpl       INPUT allow-list + OUTPUT restriction
 scripts/
   zone.sh                register / update / remove a zone
+  names3.sh              production → staging / dev hostnames of a create3 set
 example.com.dns          sample records file — copy to <domain>.dns
 Makefile
 ```
@@ -74,6 +81,13 @@ at 100%, SSH unresponsive). Setup mitigates this — zram swap, persistent
 journal, `dnf-makecache.timer` disabled on the host and in the image, and
 container `dnf-automatic-install` firings spread with `RandomizedDelaySec` —
 but mitigation is no substitute for enough RAM.
+
+A [three-container set](#three-container-sets-production--staging--development)
+needs less than three standalone containers: staging and production run no
+Node.js. Measured on a 449 MB host with zram: about 60 MB resident for the dev
+container and 12 MB each for staging and production at idle, before the
+application's own processes. Two simultaneous container `dnf` runs peaked at
+about 320 MB of swap, mostly absorbed by zram. Plan on 1 GB or more per set.
 
 ## Installation
 
@@ -209,6 +223,123 @@ Delete a container (manual):
 podman stop test.ksy.jp-web && podman rm test.ksy.jp-web
 rm -f test.ksy.jp__alice@gmail.com.done
 ```
+
+## Three-container sets (production / staging / development)
+
+For an application whose production server holds customer data, Claude should
+work only on a development copy. `create3` makes three containers from the same
+image:
+
+| Hostname | Role | MCP | Updated by |
+|---|---|---|---|
+| `shop.ksy.jp` | production | no | a person on the host: `make shop.ksy.jp.to-prod` |
+| `shop-staging.ksy.jp` | staging (checks that the Makefile works) | no | a person on the host: `make shop.ksy.jp.to-stg` |
+| `shop-dev.ksy.jp` | development | yes | Claude, through the MCP connector |
+
+For a domain apex (`ksy.jp`) the others are `staging.ksy.jp` and `dev.ksy.jp`.
+Do not use `-staging` / `-dev` labels (or `staging` / `dev` under an apex) for
+anything else: the mail copy and the staging view below select containers by
+these names.
+
+```sh
+make install-services                   # once per host (also after a git pull)
+make shop.ksy.jp__alice@gmail.com.create3
+```
+
+`create3` creates the three containers, runs the usual first-boot init on each
+(certificate, Postfix; MCP only on dev), puts a skeleton repository in the dev
+container's `/srv/app` (`CLAUDE.md`, `Makefile`, `files/`) and sends it through
+staging to production, so all three share one git history from the start.
+Register only the dev container as a connector (`https://shop-dev.ksy.jp/mcp/sse`).
+
+### Workflow
+
+1. Claude edits `/srv/app` in the dev container, tries it with `make install`,
+   and commits. `/srv/app/CLAUDE.md` explains the conventions to Claude.
+2. `make shop.ksy.jp.to-stg` sends dev's committed HEAD to staging (refused if
+   dev has uncommitted changes, or if staging's `/srv/app` was edited by hand)
+   and runs `make -C /srv/app install` there. On failure, `install` prints
+   diagnostics; hand them to Claude.
+3. `make shop.ksy.jp.to-prod` shows the commits and the **full diff**
+   production will receive, asks for confirmation, sends **staging's** HEAD
+   (so production gets exactly what staging ran, even if dev has moved on),
+   fast-forward only, and runs `make install` there.
+4. `make shop.ksy.jp.list3` shows the three containers and their HEADs.
+
+After each transfer the dev repository records `staging/main` and
+`production/main` (remote-tracking refs), so Claude can see what each server
+runs — e.g. branch a hotfix from `production/main`. Staging follows whatever is
+sent, so such a hotfix can go through staging to production.
+
+Claude's trial and error never reaches production: production and staging
+have no MCP server (`mcp.d/` is empty, `/mcp/` does not exist), and the only
+way anything reaches them is a person running `make` on the host.
+
+### What the dev container sees of staging
+
+- **`/mnt/staging`** — staging's whole filesystem, read-only and live. An OCI
+  hook (`/usr/share/containers/oci/hooks.d/vps-mcp-stgview-*.json`) binds the
+  staging rootfs with a single `mount --bind -o ro` on every staging start and
+  removes it on stop; the dev container mounts it `ro,rslave`. Container root
+  cannot remount it read-write (no `CAP_SYS_ADMIN`; the read-only flag is
+  locked even inside a user namespace). Hook actions are logged:
+  `journalctl -t vps-mcp-stgview`.
+- **`/srv/stg-mail/`** — a copy of every message staging sends (one `.eml` per
+  message, kept 14 days). The message itself is delivered normally. The mail
+  policy adds `BCC stgcapture+<staging>@localhost` for staging containers only,
+  before queueing, so no copy of production mail is ever written on the host.
+
+### Host pieces (`make install-services`)
+
+| File | Purpose |
+|---|---|
+| `vps-mcp-containers.service` | `/run/vps-mcp/containers`: name/IP list for the mail policy |
+| `vps-mcp-view.service` | at boot, before `podman-restart.service`: shared view root and per-staging mount points |
+| `hooks.d/vps-mcp-stgview-{poststart,poststop}.json` + `vps-mcp-stgview-hook.sh` | staging view (see above) |
+| `vps-mcp-mailquota.sh` | daily quota, plus the staging BCC |
+| `/etc/aliases` `stgcapture`, `recipient_delimiter = +` | staging copies → `/var/spool/vps-mcp-stgmail/` |
+| `vps-mcp-stgmail.path` / `.service` | hand each copy to the dev container |
+| `vps-mcp-stgmail-retry.timer` | retry copies held while the dev container was down |
+
+`make mcpupdate` updates the dev container of a set and skips its staging and
+production; `make shop.ksy.jp.mcpupdate` updates `shop-dev.ksy.jp`.
+
+## nginx layout: `mcp.d/` and `app.d/`
+
+Containers created from the current image include, inside the HTTPS server
+block of `/etc/nginx/conf.d/vps-mcp.conf`:
+
+- `/etc/nginx/mcp.d/*.conf` — the MCP server's locations (empty on staging and
+  production of a set)
+- `/etc/nginx/app.d/*.conf` — **one file per application** (location blocks)
+
+so adding an application never rewrites another application's — or the MCP
+server's — configuration from a stale copy. The tool descriptions tell Claude
+to use `app.d/<application>.conf` when this layout is present.
+
+### Migrating an existing container's nginx configuration
+
+Containers created before this layout keep every location in `vps-mcp.conf`
+(`make check` reports it as DIFFER plus `NOTE … old nginx layout`). Migrate
+through the container's own connector, by asking Claude:
+
+> In this container, split /etc/nginx/conf.d/vps-mcp.conf into the mcp.d/ and
+> app.d/ layout of the vps-mcp repository (multidomain/container/nginx/):
+> 1. Copy vps-mcp.conf to /root/vps-mcp.conf.bak.
+> 2. Move the MCP locations (`= /.well-known/oauth-authorization-server` and
+>    every `/mcp/...` location) unchanged into /etc/nginx/mcp.d/mcp.conf.
+> 3. Move every other location of the HTTPS server block, grouped per
+>    application, into /etc/nginx/app.d/<application>.conf (the plain
+>    `location /` serving /var/www/html goes to app.d/default.conf).
+> 4. In vps-mcp.conf, replace the moved locations with
+>    `include /etc/nginx/mcp.d/*.conf;` and `include /etc/nginx/app.d/*.conf;`,
+>    and add the "DO NOT EDIT THIS FILE" header comment of the repository copy.
+>    Leave the server blocks, certificates and redirects as they are.
+> 5. Run `nginx -t`; if it fails, restore the backup. Then use the
+>    nginx_reload tool (not systemctl) and check that the site and
+>    /.well-known/oauth-authorization-server still answer.
+
+Then run `make <name>.mcpupdate` so the tool descriptions mention `app.d/`.
 
 ## MCP connector setup
 

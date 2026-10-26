@@ -1,0 +1,7 @@
+[Unit]
+Description=vps-mcp: requeue held staging mail copies
+Documentation=https://github.com/paijp/vps-subdomain-mcp
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'mv /var/spool/vps-mcp-stgmail/hold/* /var/spool/vps-mcp-stgmail/new/ 2>/dev/null || true'

@@ -1,0 +1,13 @@
+[Unit]
+Description=vps-mcp: publish container name/IP list to /run/vps-mcp/containers
+Documentation=https://github.com/paijp/vps-subdomain-mcp
+After=podman.socket
+Requires=podman.socket
+
+[Service]
+ExecStart=/usr/local/libexec/vps-mcp-containers.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

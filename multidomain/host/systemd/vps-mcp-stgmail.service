@@ -1,0 +1,7 @@
+[Unit]
+Description=vps-mcp: forward staging mail copies to dev containers
+Documentation=https://github.com/paijp/vps-subdomain-mcp
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/vps-mcp-stgmail-forward.sh

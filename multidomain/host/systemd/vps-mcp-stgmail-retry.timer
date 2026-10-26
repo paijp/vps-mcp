@@ -1,0 +1,10 @@
+[Unit]
+Description=vps-mcp: retry forwarding held staging mail copies every minute
+Documentation=https://github.com/paijp/vps-subdomain-mcp
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
