@@ -20,7 +20,7 @@ REQUIRED_LOCAL :=
 
 ROLE := $(shell sed -n 's/^ROLE=//p' /etc/vps-mcp-env 2>/dev/null)
 
-RSYNC := rsync -rlt --checksum --exclude=.gitkeep
+RSYNC := rsync -rlt --omit-dir-times --checksum --exclude=.gitkeep
 
 .PHONY: install install-inner check files reload getlog diff
 
