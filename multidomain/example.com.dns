@@ -1,0 +1,19 @@
+; https://github.com/paijp/vps-subdomain-mcp
+;
+; Operator-managed DNS records for one domain (multidomain edition).
+; Copy to <your-domain>.dns, edit, then run:  make <your-domain>.dnsdone
+; Re-run after every edit; delete a line and re-run to delete a record.
+;
+; Names are relative to the domain (@ = the domain itself).
+; The host adds SOA, NS, ns1 A and DKIM (mail._domainkey) — do not write
+; those. It also adds defaults for @ A, * A, the @ / * SPF TXT and the
+; _dmarc TXT; writing one of these here replaces that default (e.g. point
+; the apex at another server, or keep an existing SPF). No A/AAAA/CNAME on
+; names served by a container.
+; Every record line must start with its owner name (no leading whitespace).
+
+; @       IN MX    10 mail.example.net.
+; @       IN TXT   "google-site-verification=xxxxxxxx"
+; docs    IN CNAME ghs.googlehosted.com.
+; @       IN A     192.0.2.10                       ; apex on another server
+; @       IN TXT   "v=spf1 a:mail.example.net mx ~all"  ; own SPF instead of the default

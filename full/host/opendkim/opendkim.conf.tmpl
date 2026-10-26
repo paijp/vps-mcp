@@ -1,0 +1,15 @@
+# https://github.com/paijp/vps-mcp
+
+# opendkim.conf — DKIM signing for vps-mcp host
+Mode            s
+Syslog          yes
+SyslogSuccess   yes
+Domain          __DOMAIN__
+KeyFile         /etc/opendkim/keys/__DOMAIN__/mail.private
+Selector        mail
+Socket          inet:8891@127.0.0.1
+UserID          opendkim
+
+InternalHosts   127.0.0.1, ::1
+
+SubDomains      yes

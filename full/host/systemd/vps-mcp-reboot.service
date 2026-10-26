@@ -1,0 +1,7 @@
+[Unit]
+Description=Weekly automatic reboot for the VPS MCP host
+Documentation=https://github.com/paijp/vps-mcp
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl reboot
