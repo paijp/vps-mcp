@@ -46,6 +46,16 @@ RUN systemctl mask \
     NetworkManager.service \
     firewalld.service
 
+# ── Persistent journal ────────────────────────────────────────────────────────
+# journald writes to disk only if /var/log/journal exists when it starts;
+# otherwise the logs stay in /run (tmpfs), which a development container's
+# read-only view of its staging container (/mnt/stg) does not include, and
+# which is lost when the container restarts. Size-capped so a chatty
+# application cannot fill the host's disk.
+RUN mkdir -p /var/log/journal /etc/systemd/journald.conf.d \
+ && printf '[Journal]\nStorage=persistent\nSystemMaxUse=200M\n' \
+        > /etc/systemd/journald.conf.d/vps-mcp.conf
+
 # ── Automatic security updates ────────────────────────────────────────────────
 # dnf-automatic-install always applies updates (no config needed).
 # The container itself never reboots — the host's weekly vps-mcp-reboot.timer
