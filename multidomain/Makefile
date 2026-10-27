@@ -545,9 +545,11 @@ endef
 	echo "==> make install on $(_S)-web"; \
 	podman exec $(_S)-web make -C /srv/app install
 
-# Send staging's HEAD to production and install it there, after showing every
-# commit and the full diff that production will receive and asking for
-# confirmation (YES=1 skips the question; create3 uses it for the skeleton).
+# Send staging's HEAD to production and install it there, after showing the
+# commits and changed files production will receive (DIFF=1: the full diff)
+# and asking for confirmation (YES=1 skips the question; create3 uses it for
+# the skeleton). If production already runs staging's HEAD (e.g. an install
+# that failed on a missing local file), only make install runs again.
 # Production only fast-forwards and stops if its /srv/app was edited by hand.
 %.stg2prod:
 	$(call names3,$*)
@@ -558,8 +560,11 @@ endef
 	sh=$$(podman exec $(_S)-web git -C /srv/app rev-parse HEAD); \
 	ph=$$(podman exec $(_P)-web git -C /srv/app rev-parse -q --verify HEAD || true); \
 	dh=$$(podman exec $(_D)-web git -C /srv/app rev-parse HEAD); \
-	if [ "$$sh" = "$$ph" ]; then echo "Production already runs staging's HEAD; nothing to deploy."; exit 0; fi; \
-	if [ -n "$$ph" ]; then \
+	same=; [ "$$sh" = "$$ph" ] && same=1; \
+	if [ -n "$$same" ]; then \
+	    echo "== production already runs staging's HEAD ($$(podman exec $(_S)-web git -C /srv/app log -1 --format='%h %s')):"; \
+	    echo "   nothing to send; make install runs again (it is idempotent)"; \
+	elif [ -n "$$ph" ]; then \
 	    echo "== commits going to production (staging's HEAD, tested there):"; \
 	    podman exec $(_S)-web git -C /srv/app log --oneline $$ph..HEAD || \
 	        { echo "Error: production's HEAD is not in staging's history."; exit 1; }; \
@@ -589,11 +594,13 @@ endef
 	    printf 'Deploy to %s? [y/N] ' "$(_P)"; read a; \
 	    [ "$$a" = y ] || { echo "aborted"; exit 1; }; \
 	fi; \
-	echo "==> $(_S)-web  ->  $(_P)-web"; \
-	h=$$(podman exec $(_S)-web git -C /srv/app bundle create -q - HEAD \
-	     | podman exec -i $(_P)-web /usr/local/bin/vps-mcp-recv.sh prod); \
-	podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/prod/main $$h; \
-	echo "    prod/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
+	if [ -z "$$same" ]; then \
+	    echo "==> $(_S)-web  ->  $(_P)-web"; \
+	    h=$$(podman exec $(_S)-web git -C /srv/app bundle create -q - HEAD \
+	         | podman exec -i $(_P)-web /usr/local/bin/vps-mcp-recv.sh prod); \
+	    podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/prod/main $$h; \
+	    echo "    prod/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
+	fi; \
 	echo "==> make install on $(_P)-web"; \
 	podman exec $(_P)-web make -C /srv/app install
 

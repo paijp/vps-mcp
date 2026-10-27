@@ -266,7 +266,9 @@ Register only the dev container as a connector (`https://shop-dev.ksy.jp/mcp/sse
    what staging ran, even if dev has moved on), fast-forward only, and runs
    `make install` there. If dev has moved on, its new commits are printed
    with their full diff as a warning just before the question: they are not
-   deployed.
+   deployed. When production already runs staging's HEAD (for example after
+   an `install` that stopped on a missing hand-placed file), nothing is sent
+   and `make install` runs again.
 4. `make shop.ksy.jp.list3` shows the three containers and their HEADs.
 
 After each transfer the dev repository records `stg/main` and
