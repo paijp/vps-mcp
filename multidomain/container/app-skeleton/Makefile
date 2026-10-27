@@ -12,10 +12,19 @@ SHELL := /bin/bash
 # /etc/nginx/app.d/x.conf. Directories listed here are mirrored exactly (a file
 # deleted from the repository is deleted there too); everything else under
 # files/ is copied over without deleting anything.
-MIRROR_DIRS := etc/nginx/app.d
+MIRROR_DIRS := etc/nginx/app.d opt/app.d
 
-# Per-environment files placed by hand on each server and never committed
-# (passwords, API keys, ...). install stops if one is missing.
+# Applications live in files/opt/app.d/<app>/ (installed to /opt/app.d/<app>/,
+# mirrored). An application with per-server settings ships a template
+# files/opt/app.d/<app>/env.py.sample; the real file is
+# /opt/env.d/<app>/env.py, which install never writes: a person copies the
+# template there once on staging and once on production (on the development
+# container install copies it when missing).
+APPS := $(notdir $(patsubst %/,%,$(wildcard files/opt/app.d/*/)))
+ENV_APPS := $(foreach a,$(APPS),$(if $(wildcard files/opt/app.d/$(a)/env.py.sample),$(a)))
+
+# Other per-environment files placed by hand on each server and never
+# committed (passwords, API keys, ...). install stops if one is missing.
 REQUIRED_LOCAL :=
 
 ROLE := $(shell sed -n 's/^ROLE=//p' /etc/vps-mcp-env 2>/dev/null)
@@ -35,6 +44,23 @@ install:
 install-inner: check files reload
 
 check:
+	@for f in files/opt/app.d/*/env.py; do \
+	    test ! -e "$$f" || { echo "$$f: settings go in /opt/env.d/<app>/env.py, not in the repository"; exit 1; }; \
+	done
+ifeq ($(ROLE),dev)
+	@for a in $(ENV_APPS); do \
+	    test -e /opt/env.d/$$a/env.py || { install -D -m 644 files/opt/app.d/$$a/env.py.sample /opt/env.d/$$a/env.py; \
+	        echo "dev: created /opt/env.d/$$a/env.py from env.py.sample"; }; \
+	done
+endif
+	@for a in $(ENV_APPS); do \
+	    f=/opt/env.d/$$a/env.py; \
+	    test -e "$$f" || { echo "missing $$f (place it by hand on this server):"; \
+	        echo "    mkdir -p /opt/env.d/$$a && cp /srv/app/files/opt/app.d/$$a/env.py.sample $$f"; exit 1; }; \
+	    for v in $$(sed -n 's/^\([A-Z_][A-Z0-9_]*\) *=.*/\1/p' files/opt/app.d/$$a/env.py.sample); do \
+	        grep -q "^$$v *=" "$$f" || echo "warning: $$f has no $$v (see env.py.sample)"; \
+	    done; \
+	done
 	@for f in $(REQUIRED_LOCAL); do \
 	    test -e "$$f" || { echo "missing $$f (place it by hand on this server)"; exit 1; }; \
 	done
