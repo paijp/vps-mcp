@@ -207,6 +207,7 @@ check_pair host/nftables/vps-mcp.nft.tmpl      /etc/nftables.d/vps-mcp.nft      
 for _f in vps-mcp-containers.sh vps-mcp-stgmail-forward.sh vps-mcp-stgview-hook.sh vps-mcp-view-setup.sh; do
     check_pair host/three/$_f /usr/local/libexec/$_f
 done
+check_pair host/three/vps-mcp-hooks.conf /etc/containers/containers.conf.d/vps-mcp-hooks.conf
 for _f in vps-mcp-stgview-poststart.json vps-mcp-stgview-poststop.json; do
     check_pair host/three/$_f /usr/share/containers/oci/hooks.d/$_f
 done

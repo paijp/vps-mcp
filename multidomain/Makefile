@@ -301,6 +301,8 @@ install-services:
 	install -d -m 755 /usr/share/containers/oci/hooks.d
 	install -m 644 host/three/vps-mcp-stgview-poststart.json /usr/share/containers/oci/hooks.d/
 	install -m 644 host/three/vps-mcp-stgview-poststop.json  /usr/share/containers/oci/hooks.d/
+	install -d -m 755 /etc/containers/containers.conf.d
+	install -m 644 host/three/vps-mcp-hooks.conf /etc/containers/containers.conf.d/vps-mcp-hooks.conf
 	for u in vps-mcp-containers.service vps-mcp-view.service vps-mcp-stgmail.path \
 	         vps-mcp-stgmail.service vps-mcp-stgmail-retry.service vps-mcp-stgmail-retry.timer; do \
 	    install -m 644 host/systemd/$$u /etc/systemd/system/; \
