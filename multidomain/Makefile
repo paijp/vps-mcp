@@ -399,7 +399,9 @@ domains:
 # login's verified primary email matches NOTIFY_EMAIL.
 
 # podman_run FQDN EMAIL EXTRA — create <FQDN>-web with the options every
-# container shares (%.done and %.create3).
+# container shares (%.done and %.create3). The journal gets a volume of its
+# own: in systemd mode Podman would otherwise mount a tmpfs on /var/log/journal
+# and the logs would be lost on every restart.
 podman_run = podman run -d \
     --name     $(1)-web \
     --hostname $(1) \
@@ -412,6 +414,7 @@ podman_run = podman run -d \
     --env      SUBDOMAIN=$(1) \
     --env      MAIL_DOMAIN=$(1) \
     --env      NOTIFY_EMAIL=$(2) \
+    -v         $(1)-journal:/var/log/journal \
     $(3) \
     $(IMAGE)
 
