@@ -47,13 +47,13 @@ LIVE=/etc/letsencrypt/live/$SUBDOMAIN
 # between the http and stream modules.
 apply() {
     local bak; bak=$(mktemp -d /var/tmp/vps-mcp-mode.XXXXXX)
-    cp -a $N/listen443.conf $N/listen443-local.conf $N/ssl-cert.conf "$bak/"
+    cp -a $N/listen443.conf $N/listen443-main.conf $N/ssl-cert.conf "$bak/"
     cp -a $N/http80.d $N/stream.d "$bak/"
     if "$@" && nginx -t 2>&1; then
         systemctl restart nginx
         rm -rf "$bak"
     else
-        cp -a "$bak"/listen443.conf "$bak"/listen443-local.conf "$bak"/ssl-cert.conf $N/
+        cp -a "$bak"/listen443.conf "$bak"/listen443-main.conf "$bak"/ssl-cert.conf $N/
         rm -rf $N/http80.d $N/stream.d; cp -a "$bak"/http80.d "$bak"/stream.d $N/
         rm -rf "$bak"
         die "nginx rejected the new configuration; previous files restored"
@@ -93,7 +93,11 @@ EOF
 # HTTPS server blocks wait on 127.0.0.1:8443. unforward restores the original.
 listen 127.0.0.1:8443 ssl proxy_protocol;
 EOF
-    echo 'listen 127.0.0.1:8444 ssl;  # forward mode' > $N/listen443-local.conf
+    cat > $N/listen443-main.conf <<'EOF'
+# Forward mode (vps-mcp-mode.sh): see listen443.conf. unforward restores it.
+listen 127.0.0.1:8443 ssl proxy_protocol default_server;
+listen 127.0.0.1:8444 ssl;
+EOF
     rm -f $N/http80.d/*.conf
     {
         echo "# Forward mode (vps-mcp-mode.sh): ACME challenges here first, then $ip."
@@ -114,7 +118,7 @@ EOF
 # exactly what the image ships (no second copy of their content here).
 normal_files() {
     rm -f $N/stream.d/forward.conf
-    cp $SHARE/listen443.conf $SHARE/listen443-local.conf $N/
+    cp $SHARE/listen443.conf $SHARE/listen443-main.conf $N/
     rm -f $N/http80.d/*.conf
     cp $SHARE/http80-default.conf $N/http80.d/default.conf
 }

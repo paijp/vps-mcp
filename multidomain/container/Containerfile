@@ -84,11 +84,11 @@ COPY nginx/app-default.conf  /etc/nginx/app.d/default.conf
 # Pieces every HTTPS server block includes, so forward mode (vps-mcp-mode.sh)
 # can switch all of them by rewriting a few files.
 COPY nginx/listen443.conf       /etc/nginx/listen443.conf
-COPY nginx/listen443-local.conf /etc/nginx/listen443-local.conf
+COPY nginx/listen443-main.conf  /etc/nginx/listen443-main.conf
 COPY nginx/ssl-cert.conf        /etc/nginx/ssl-cert.conf
 COPY nginx/http80-default.conf  /etc/nginx/http80.d/default.conf
 RUN mkdir -p /etc/nginx/stream.d
-COPY nginx/listen443.conf nginx/listen443-local.conf nginx/http80-default.conf \
+COPY nginx/listen443.conf nginx/listen443-main.conf nginx/http80-default.conf \
      /usr/local/share/vps-mcp/nginx/
 
 # ── Postfix nullclient ────────────────────────────────────────────────────────
