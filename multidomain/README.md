@@ -260,10 +260,13 @@ Register only the dev container as a connector (`https://shop-dev.ksy.jp/mcp/sse
    dev has uncommitted changes, or if staging's `/srv/app` was edited by hand)
    and runs `make -C /srv/app install` there. On failure, `install` prints
    diagnostics; hand them to Claude.
-3. `make shop.ksy.jp.stg2prod` shows the commits and the **full diff**
-   production will receive, asks for confirmation, sends **staging's** HEAD
-   (so production gets exactly what staging ran, even if dev has moved on),
-   fast-forward only, and runs `make install` there.
+3. `make shop.ksy.jp.stg2prod` shows the commits and the changed files
+   (`git diff --stat`) production will receive (`DIFF=1` adds the full diff),
+   asks for confirmation, sends **staging's** HEAD (so production gets exactly
+   what staging ran, even if dev has moved on), fast-forward only, and runs
+   `make install` there. If dev has moved on, its new commits are printed
+   with their full diff as a warning just before the question: they are not
+   deployed.
 4. `make shop.ksy.jp.list3` shows the three containers and their HEADs.
 
 After each transfer the dev repository records `stg/main` and

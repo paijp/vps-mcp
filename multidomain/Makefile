@@ -65,7 +65,7 @@ help:
 	@printf "  make shop.ksy.jp__alice@ex.com.create3 shop.ksy.jp (prod), shop-stg.ksy.jp,\n"
 	@printf "                                         shop-dev.ksy.jp (the only one with MCP)\n"
 	@printf "  make shop.ksy.jp.dev2stg               Send dev's committed HEAD to staging, make install\n"
-	@printf "  make shop.ksy.jp.stg2prod              Show the full diff, ask, send staging's HEAD to prod\n"
+	@printf "  make shop.ksy.jp.stg2prod              Show commits/stat (DIFF=1: full diff), ask, send staging's HEAD to prod\n"
 	@printf "  make shop.ksy.jp.list3                 Status and git HEAD of the three containers\n"
 	@printf "      For a domain apex (ksy.jp) the others are stg.ksy.jp and dev.ksy.jp.\n\n"
 	@printf "Moving a site from an old server without downtime (forward mode):\n"
@@ -559,18 +559,31 @@ endef
 	ph=$$(podman exec $(_P)-web git -C /srv/app rev-parse -q --verify HEAD || true); \
 	dh=$$(podman exec $(_D)-web git -C /srv/app rev-parse HEAD); \
 	if [ "$$sh" = "$$ph" ]; then echo "Production already runs staging's HEAD; nothing to deploy."; exit 0; fi; \
-	if [ "$$dh" != "$$sh" ]; then \
-	    echo "== Note: dev has commits that are not on staging (NOT deployed):"; \
-	    podman exec $(_D)-web git -C /srv/app log --oneline $$sh..$$dh || true; \
-	fi; \
 	if [ -n "$$ph" ]; then \
-	    echo "== commits going to production:"; \
+	    echo "== commits going to production (staging's HEAD, tested there):"; \
 	    podman exec $(_S)-web git -C /srv/app log --oneline $$ph..HEAD || \
 	        { echo "Error: production's HEAD is not in staging's history."; exit 1; }; \
-	    echo "== diff:"; \
-	    podman exec $(_S)-web git -C /srv/app --no-pager diff $$ph HEAD; \
+	    podman exec $(_S)-web git -C /srv/app --no-pager diff --stat $$ph HEAD; \
+	    if [ "$(DIFF)" = 1 ]; then \
+	        echo "== diff (production -> staging):"; \
+	        podman exec $(_S)-web git -C /srv/app --no-pager diff $$ph HEAD; \
+	    else \
+	        echo "   (full diff: make $*.stg2prod DIFF=1)"; \
+	    fi; \
 	else \
 	    echo "== first deploy to $(_P)"; \
+	fi; \
+	if [ "$$dh" != "$$sh" ]; then \
+	    echo; \
+	    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
+	    echo "!! WARNING: dev has changed since staging was updated. These changes"; \
+	    echo "!! are NOT deployed (run $*.dev2stg and test on staging first):"; \
+	    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"; \
+	    podman exec $(_D)-web git -C /srv/app log --oneline $$sh..$$dh || true; \
+	    podman exec $(_D)-web git -C /srv/app --no-pager diff --stat $$sh $$dh || true; \
+	    podman exec $(_D)-web git -C /srv/app --no-pager diff $$sh $$dh || true; \
+	    echo "!! (end of changes NOT deployed)"; \
+	    echo; \
 	fi; \
 	if [ "$(YES)" != 1 ]; then \
 	    printf 'Deploy to %s? [y/N] ' "$(_P)"; read a; \
