@@ -324,7 +324,7 @@ if command -v podman >/dev/null 2>&1; then
         role=$(podman exec "$c" sed -n 's/^ROLE=//p' /etc/vps-mcp-env 2>/dev/null)
         if podman exec "$c" test -d /etc/nginx/mcp.d 2>/dev/null; then
             case $role in
-                staging|prod) echo "OK       $c: no MCP (ROLE=$role)" ;;
+                stg|prod) echo "OK       $c: no MCP (ROLE=$role)" ;;
                 *) check_in_container "$c" container/nginx/mcp.conf /etc/nginx/mcp.d/mcp.conf ;;
             esac
         else
@@ -332,6 +332,10 @@ if command -v podman >/dev/null 2>&1; then
         fi
         if [ -n "$role" ]; then
             check_in_container "$c" container/systemd/vps-mcp-recv.sh /usr/local/bin/vps-mcp-recv.sh
+        fi
+        if podman exec "$c" test -f /etc/nginx/ssl-cert.conf 2>/dev/null; then
+            check_in_container "$c" container/systemd/vps-mcp-mode.sh /usr/local/bin/vps-mcp-mode.sh
+            echo "INFO     $c: $(podman exec "$c" /usr/local/bin/vps-mcp-mode.sh status 2>/dev/null | tr '\n' ';' | sed 's/;  */; /g')"
         fi
 
         # Diagnostic tools (ss/ps/lsof/sqlite3/jq). A container created from an

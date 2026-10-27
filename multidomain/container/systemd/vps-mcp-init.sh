@@ -10,11 +10,11 @@
 #   4. Substitute server_name in the nginx config; reload nginx
 #   5. Run certbot certonly --webroot
 #   6. Switch nginx cert paths to Let's Encrypt; reload nginx
-#   7. systemctl enable --now mcp-server  (not for ROLE=staging/prod)
+#   7. systemctl enable --now mcp-server  (not for ROLE=stg/prod)
 #   8. Prepare /srv/app (ROLE set only)
 #   9. Creation notification
 #
-# ROLE (create3 sets only): dev | staging | prod. Empty for a standalone
+# ROLE (create3 sets only): dev | stg | prod. Empty for a standalone
 # container. staging/prod run no MCP server and have an empty nginx mcp.d/.
 set -euo pipefail
 
@@ -30,12 +30,14 @@ OAUTH_BASE="${OAUTH_BASE:-}"
 GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID:-}"
 GITHUB_CLIENT_SECRET="${GITHUB_CLIENT_SECRET:-}"
 ROLE="${ROLE:-}"
+# FORWARD: IP of the old server this site moves from (IP__fqdn__email targets).
+FORWARD="${FORWARD:-}"
 case "$ROLE" in
-    ''|dev|staging|prod) ;;
+    ''|dev|stg|prod) ;;
     *) echo "vps-mcp-init: unknown ROLE=$ROLE" >&2; exit 1 ;;
 esac
 # MCP runs everywhere except on the staging/prod containers of a create3 set.
-case "$ROLE" in staging|prod) RUN_MCP=no ;; *) RUN_MCP=yes ;; esac
+case "$ROLE" in stg|prod) RUN_MCP=no ;; *) RUN_MCP=yes ;; esac
 start_mcp() {
     if [[ $RUN_MCP == yes ]]; then systemctl enable --now mcp-server; fi
 }
@@ -87,36 +89,18 @@ sed -i "s/server_name _;/server_name ${SUBDOMAIN};/g" "${NGINX_CONF}"
 if [[ $RUN_MCP == no ]]; then rm -f /etc/nginx/mcp.d/*.conf; fi
 nginx -t && systemctl reload nginx
 
-# ── 5. certbot ───────────────────────────────────────────────────────────────
-if [[ -n "${NOTIFY_EMAIL}" ]]; then
-    CERTBOT_EMAIL_FLAGS="--email ${NOTIFY_EMAIL} --no-eff-email"
-else
-    CERTBOT_EMAIL_FLAGS="--register-unsafely-without-email"
-fi
-certbot certonly \
-    --webroot --webroot-path /var/www/html \
-    --non-interactive --agree-tos \
-    ${CERTBOT_EMAIL_FLAGS} \
-    --domain "${SUBDOMAIN}" \
-    || { echo "vps-mcp-init: certbot failed, keeping self-signed cert" >&2
-         CERT_FAILED=yes; }
-
-# ── 6. nginx: switch to Let's Encrypt cert ───────────────────────────────────
-if [[ ${CERT_FAILED:-no} == no ]]; then
-    LIVE_DIR="/etc/letsencrypt/live/${SUBDOMAIN}"
-    sed -i \
-        -e "s|ssl_certificate .*|ssl_certificate     ${LIVE_DIR}/fullchain.pem;|" \
-        -e "s|ssl_certificate_key .*|ssl_certificate_key ${LIVE_DIR}/privkey.pem;|" \
-        "${NGINX_CONF}"
-    nginx -t && systemctl reload nginx
-fi
+# ── 5./6. Let's Encrypt certificate ─────────────────────────────────────────
+# Fails (self-signed kept) when the hostname does not point here yet, e.g. a
+# container created before its DNS moves; run make <hostname>.getcert later.
+/usr/local/bin/vps-mcp-mode.sh getcert ||
+    echo "vps-mcp-init: no certificate yet, keeping self-signed (make ${SUBDOMAIN}.getcert later)" >&2
 
 # ── 7. mcp-server ────────────────────────────────────────────────────────────
 start_mcp
 
 # ── 8. /srv/app (create3 sets) ───────────────────────────────────────────────
 # dev starts from the skeleton as the first commit; staging and prod start
-# empty and receive that commit from the host (make <fqdn>.to-stg/.to-prod), so
+# empty and receive that commit from the host (make <fqdn>.dev2stg/.stg2prod), so
 # all three share one history and production can always fast-forward.
 if [[ -n $ROLE && ! -d /srv/app/.git ]]; then
     mkdir -p /srv/app
@@ -125,8 +109,27 @@ if [[ -n $ROLE && ! -d /srv/app/.git ]]; then
     git -C /srv/app config user.email "noreply@${MAIL_DOMAIN}"
     if [[ $ROLE == dev ]]; then
         cp -a /usr/local/share/vps-mcp/app-skeleton/. /srv/app/
+        # Migrating from an old server: start with "everything except the MCP
+        # server goes to $FORWARD", so staging/production get it too.
+        if [[ -n $FORWARD ]]; then
+            /usr/local/bin/vps-mcp-mode.sh seed "$FORWARD" /srv/app/files
+        fi
         git -C /srv/app add -A
         git -C /srv/app commit -q -m "skeleton (vps-mcp create3)"
+    fi
+fi
+
+# ── 8b. Forward mode (migrating from an old server at $FORWARD) ─────────────
+# Standalone container: seed the "everything except MCP goes to $FORWARD"
+# configuration, then pass 443 through until make <hostname>.unforward.
+# Production of a create3 set: its configuration arrives from the dev
+# repository (seeded above), so only the mode is switched here.
+if [[ -n $FORWARD ]]; then
+    if [[ -z $ROLE ]]; then
+        /usr/local/bin/vps-mcp-mode.sh seed "$FORWARD"
+    fi
+    if [[ -z $ROLE || $ROLE == prod ]]; then
+        /usr/local/bin/vps-mcp-mode.sh forward "$FORWARD"
     fi
 fi
 
@@ -141,7 +144,7 @@ To: ${NOTIFY_EMAIL}
 Subject: VPS ready: ${SUBDOMAIN} (${ROLE}, no MCP)
 
 The ${ROLE} container ${SUBDOMAIN} is ready. It has no MCP connector; it is
-updated only from the host (make <production-fqdn>.to-stg / .to-prod).
+updated only from the host (make <production-fqdn>.dev2stg / .stg2prod).
 EOF
 elif [[ -n "${NOTIFY_EMAIL}" ]]; then
     /usr/sbin/sendmail -f "noreply@${MAIL_DOMAIN}" "${NOTIFY_EMAIL}" <<EOF

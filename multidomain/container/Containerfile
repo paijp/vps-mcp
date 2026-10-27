@@ -9,7 +9,8 @@ FROM rockylinux:10
 # iproute / procps-ng / lsof / sqlite / jq are the everyday tools exec_command
 # reaches for (ss, ps, lsof, sqlite3, jq); a minimal image ships none of them.
 # git / make / rsync carry the create3 deploy flow (bundle transfer, make
-# install, rsync into place) and are handy in any container.
+# install, rsync into place) and are handy in any container. nginx-mod-stream
+# is the TLS passthrough of forward mode (vps-mcp-mode.sh).
 # Keep this list in sync with ../scripts/tools.sh, which drives the same install
 # for already-running containers (make mcpupdate) and the `make check` report.
 RUN dnf install -y epel-release \
@@ -32,6 +33,7 @@ RUN dnf install -y epel-release \
         git-core \
         make \
         rsync \
+        nginx-mod-stream \
     && dnf clean all
 
 # ── Disable unwanted units ────────────────────────────────────────────────────
@@ -79,6 +81,15 @@ COPY nginx/vps-mcp.conf   /etc/nginx/conf.d/vps-mcp.conf
 # vps-mcp-init.sh on staging/prod) and app.d/ (one file per application).
 COPY nginx/mcp.conf          /etc/nginx/mcp.d/mcp.conf
 COPY nginx/app-default.conf  /etc/nginx/app.d/default.conf
+# Pieces every HTTPS server block includes, so forward mode (vps-mcp-mode.sh)
+# can switch all of them by rewriting a few files.
+COPY nginx/listen443.conf       /etc/nginx/listen443.conf
+COPY nginx/listen443-local.conf /etc/nginx/listen443-local.conf
+COPY nginx/ssl-cert.conf        /etc/nginx/ssl-cert.conf
+COPY nginx/http80-default.conf  /etc/nginx/http80.d/default.conf
+RUN mkdir -p /etc/nginx/stream.d
+COPY nginx/listen443.conf nginx/listen443-local.conf nginx/http80-default.conf \
+     /usr/local/share/vps-mcp/nginx/
 
 # ── Postfix nullclient ────────────────────────────────────────────────────────
 # myhostname is set by vps-mcp-init.sh at runtime.
@@ -107,12 +118,14 @@ COPY systemd/mcp-server.service    /etc/systemd/system/mcp-server.service
 COPY systemd/vps-mcp-init.sh       /usr/local/bin/vps-mcp-init.sh
 COPY systemd/certbot-deploy.sh     /usr/local/bin/certbot-deploy.sh
 COPY systemd/vps-mcp-recv.sh       /usr/local/bin/vps-mcp-recv.sh
+COPY systemd/vps-mcp-mode.sh       /usr/local/bin/vps-mcp-mode.sh
 # Skeleton of /srv/app for the dev container of a create3 set.
 COPY app-skeleton/                 /usr/local/share/vps-mcp/app-skeleton/
 
 RUN chmod +x /usr/local/bin/vps-mcp-init.sh \
              /usr/local/bin/certbot-deploy.sh \
-             /usr/local/bin/vps-mcp-recv.sh
+             /usr/local/bin/vps-mcp-recv.sh \
+             /usr/local/bin/vps-mcp-mode.sh
 
 RUN systemctl enable \
     nginx \

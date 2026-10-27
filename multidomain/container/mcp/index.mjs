@@ -114,7 +114,12 @@ const NGINX_POLICY = !existsSync("/etc/nginx/app.d") ? "" :
   "\n\nnginx: put an application's configuration only in " +
   "/etc/nginx/app.d/<application>.conf (location blocks, included inside the " +
   "server block). Do not edit /etc/nginx/conf.d/vps-mcp.conf, /etc/nginx/mcp.d/ " +
-  "or another application's file in app.d/.";
+  "or another application's file in app.d/. An extra HTTPS server block (other " +
+  "hostname) goes in /etc/nginx/conf.d/ and must include " +
+  "/etc/nginx/listen443.conf and /etc/nginx/ssl-cert.conf instead of its own " +
+  "listen / ssl_certificate lines. app.d/forward.conf, if present, sends " +
+  "everything not handled by another file to the old server this site moves " +
+  "from; narrow it as parts move here.";
 
 // 3-container model (ROLE=dev): this container is the development server of a
 // production/staging/development trio. Production and staging have no MCP and
@@ -124,9 +129,9 @@ const DEV_MODEL =
   `(production / staging / development). You cannot reach production or ` +
   `staging; a person deploys them from the host. Work in the git repository ` +
   `/srv/app and read /srv/app/CLAUDE.md first. Commit your work: only ` +
-  `committed HEAD is sent to staging. staging/main and production/main are ` +
+  `committed HEAD is sent to staging. stg/main and prod/main are ` +
   `set by the host and show what each server runs; never move them. The ` +
-  `staging filesystem is visible read-only at /mnt/staging, and copies of ` +
+  `staging filesystem is visible read-only at /mnt/stg, and copies of ` +
   `mail sent by staging arrive in /srv/stg-mail/ (one .eml per message).`;
 
 // Line appended to tool descriptions so Claude can tell which host this

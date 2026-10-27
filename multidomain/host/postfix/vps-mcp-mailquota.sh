@@ -13,8 +13,8 @@
 # sender gets an immediate, permanent error. The per-minute rate limit is
 # done by Postfix anvil (smtpd_client_message_rate_limit), not here.
 #
-# Staging containers of a create3 set (container name *-staging.<domain>-web or
-# staging.<domain>-web, looked up by client address in /run/vps-mcp/containers)
+# Staging containers of a create3 set (container name *-stg.<domain>-web or
+# stg.<domain>-web, looked up by client address in /run/vps-mcp/containers)
 # additionally get "BCC stgcapture+<name>@localhost": the message is still
 # delivered normally, and a copy lands in /var/spool/vps-mcp-stgmail/ for
 # vps-mcp-stgmail.path to hand to the matching dev container. The decision is
@@ -45,7 +45,7 @@ decide() {
             echo "$today $((count + 1))" > "$f.tmp" && mv "$f.tmp" "$f"
             name=$(awk -F '\t' -v ip="$1" '$2 == ip { print $1; exit }' "$CONTAINERS" 2>/dev/null)
             case $name in
-                *-staging.*-web|staging.*-web) echo "action=BCC stgcapture+$name@localhost" ;;
+                *-stg.*-web|stg.*-web) echo "action=BCC stgcapture+$name@localhost" ;;
                 *) echo "action=DUNNO" ;;
             esac
         fi

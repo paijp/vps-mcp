@@ -4,7 +4,7 @@
 # container start/stop (hooks.d/vps-mcp-stgview-*.json, "always").
 #
 # Acts only on staging containers, decided by hostname (= container name
-# without "-web"): <label>-staging.<domain> or staging.<domain>.
+# without "-web"): <label>-stg.<domain> or stg.<domain>.
 #   poststart  bind the container's rootfs READ-ONLY at /run/vps-mcp/view/<host>
 #              (one `mount --bind -o ro`: the mount is read-only before it
 #              becomes visible, so the copy propagated into the dev container
@@ -20,7 +20,7 @@ state=$(cat)
 bundle=$(printf '%s' "$state" | jq -r .bundle 2>/dev/null)
 host=$(jq -r .hostname "$bundle/config.json" 2>/dev/null)
 case $host in
-    *-staging.*|staging.*) ;;
+    *-stg.*|stg.*) ;;
     *) exit 0 ;;
 esac
 case $host in */*|.*) exit 0 ;; esac

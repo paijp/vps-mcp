@@ -47,7 +47,7 @@ container/
   nginx/mcp.conf         MCP locations → /etc/nginx/mcp.d/mcp.conf
   nginx/app-default.conf default "location /" → /etc/nginx/app.d/default.conf
   app-skeleton/          /srv/app of a create3 dev container (CLAUDE.md, Makefile, files/)
-  systemd/vps-mcp-recv.sh  receives a git bundle into /srv/app (to-stg / to-prod)
+  systemd/vps-mcp-recv.sh  receives a git bundle into /srv/app (dev2stg / stg2prod)
 host/
   three/                          create3 host side: staging view hook, mail copies, name list
   bind/zone.tmpl                  host-managed part of every zone
@@ -232,12 +232,12 @@ image:
 
 | Hostname | Role | MCP | Updated by |
 |---|---|---|---|
-| `shop.ksy.jp` | production | no | a person on the host: `make shop.ksy.jp.to-prod` |
-| `shop-staging.ksy.jp` | staging (checks that the Makefile works) | no | a person on the host: `make shop.ksy.jp.to-stg` |
+| `shop.ksy.jp` | production | no | a person on the host: `make shop.ksy.jp.stg2prod` |
+| `shop-stg.ksy.jp` | staging (checks that the Makefile works) | no | a person on the host: `make shop.ksy.jp.dev2stg` |
 | `shop-dev.ksy.jp` | development | yes | Claude, through the MCP connector |
 
-For a domain apex (`ksy.jp`) the others are `staging.ksy.jp` and `dev.ksy.jp`.
-Do not use `-staging` / `-dev` labels (or `staging` / `dev` under an apex) for
+For a domain apex (`ksy.jp`) the others are `stg.ksy.jp` and `dev.ksy.jp`.
+Do not use `-stg` / `-dev` labels (or `stg` / `dev` under an apex) for
 anything else: the mail copy and the staging view below select containers by
 these names.
 
@@ -256,19 +256,19 @@ Register only the dev container as a connector (`https://shop-dev.ksy.jp/mcp/sse
 
 1. Claude edits `/srv/app` in the dev container, tries it with `make install`,
    and commits. `/srv/app/CLAUDE.md` explains the conventions to Claude.
-2. `make shop.ksy.jp.to-stg` sends dev's committed HEAD to staging (refused if
+2. `make shop.ksy.jp.dev2stg` sends dev's committed HEAD to staging (refused if
    dev has uncommitted changes, or if staging's `/srv/app` was edited by hand)
    and runs `make -C /srv/app install` there. On failure, `install` prints
    diagnostics; hand them to Claude.
-3. `make shop.ksy.jp.to-prod` shows the commits and the **full diff**
+3. `make shop.ksy.jp.stg2prod` shows the commits and the **full diff**
    production will receive, asks for confirmation, sends **staging's** HEAD
    (so production gets exactly what staging ran, even if dev has moved on),
    fast-forward only, and runs `make install` there.
 4. `make shop.ksy.jp.list3` shows the three containers and their HEADs.
 
-After each transfer the dev repository records `staging/main` and
-`production/main` (remote-tracking refs), so Claude can see what each server
-runs — e.g. branch a hotfix from `production/main`. Staging follows whatever is
+After each transfer the dev repository records `stg/main` and
+`prod/main` (remote-tracking refs), so Claude can see what each server
+runs — e.g. branch a hotfix from `prod/main`. Staging follows whatever is
 sent, so such a hotfix can go through staging to production.
 
 Claude's trial and error never reaches production: production and staging
@@ -277,7 +277,7 @@ way anything reaches them is a person running `make` on the host.
 
 ### What the dev container sees of staging
 
-- **`/mnt/staging`** — staging's whole filesystem, read-only and live. An OCI
+- **`/mnt/stg`** — staging's whole filesystem, read-only and live. An OCI
   hook (`/usr/share/containers/oci/hooks.d/vps-mcp-stgview-*.json`) binds the
   staging rootfs with a single `mount --bind -o ro` on every staging start and
   removes it on stop; the dev container mounts it `ro,rslave`. Container root
@@ -317,6 +317,12 @@ so adding an application never rewrites another application's — or the MCP
 server's — configuration from a stale copy. The tool descriptions tell Claude
 to use `app.d/<application>.conf` when this layout is present.
 
+Every HTTPS server block includes `/etc/nginx/listen443.conf` and
+`/etc/nginx/ssl-cert.conf` instead of its own `listen` / `ssl_certificate`
+lines, and the port-80 server includes `/etc/nginx/http80.d/*.conf`; an extra
+server block for another hostname (in `conf.d/`) must do the same. Forward mode
+and `getcert` switch every server block by rewriting these files.
+
 ### Migrating an existing container's nginx configuration
 
 Containers created before this layout keep every location in `vps-mcp.conf`
@@ -340,6 +346,49 @@ through the container's own connector, by asking Claude:
 >    /.well-known/oauth-authorization-server still answer.
 
 Then run `make <name>.mcpupdate` so the tool descriptions mention `app.d/`.
+
+## Moving a site from an old server (forward mode)
+
+A container created with the old server's IP in front of its name starts in
+**forward mode**, so a site can move here without going down:
+
+```sh
+make 153.126.216.5__pa-i.org__alice@gmail.com.done      # one container (MCP inside)
+make 153.126.216.5__pa-i.org__alice@gmail.com.create3   # or a set: only production forwards
+```
+
+| Port | Forward mode | After `unforward` |
+|---|---|---|
+| 443 | passed through **still encrypted** to `OLD:443` (nginx stream; the old server keeps serving with its own certificate) | served here; `app.d/forward.conf` proxies whatever is not ported yet to `https://OLD` |
+| 80 | ACME challenges answered here (falling back to the old server, so its renewals keep working); the rest proxied to `OLD:80` | ACME here, the rest redirected to HTTPS |
+
+The usual sequence:
+
+1. Register the domain here (`make <domain>.dnsdone`) with the same records,
+   then create the container(s) as above. The certificate request at creation
+   fails while the name still points at the old server; that is expected.
+2. Point the domain's DNS at this host (e.g. switch the Sakura zone to a
+   secondary of this host). Visitors keep reaching the old site through the
+   passthrough.
+3. `make pa-i.org.getcert` — one Let's Encrypt certificate for the hostname and,
+   on a production or standalone container, every name in
+   `/etc/vps-mcp/cert-names` (e.g. `www` and redirect-only names that reach the
+   apex container). Re-run to add a name or after a failure.
+4. `make pa-i.org.unforward` (refused until step 3 succeeded). This container
+   now serves 443: the MCP server and everything ported answer here, the rest
+   still goes to the old server through `app.d/forward.conf`.
+5. Port the remaining parts; narrow `forward.conf`, and delete it when nothing
+   is left on the old server. In a create3 set these files live in the dev
+   repository (`files/`), seeded at creation, and reach production with
+   `dev2stg` / `stg2prod` like any other change.
+
+`make pa-i.org.forward` (optionally `OLD=<IP>`) returns to forward mode and
+`make pa-i.org.mode` shows the mode and certificate. Everything runs inside the
+container (`/usr/local/bin/vps-mcp-mode.sh`); the host only runs `podman exec`
+— nothing on the host proxies traffic. The old server sees every request
+coming from this host's address (no PROXY header is passed on). In forward
+mode the container's own MCP server is unreachable (443 belongs to the old
+site); in a create3 set the MCP server is on the dev container and stays usable.
 
 ## MCP connector setup
 

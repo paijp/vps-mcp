@@ -7,9 +7,20 @@ IMAGE ?= vps-mcp:latest
 IP         ?= $(shell grep '^IP='         /etc/vps-mcp/host.env 2>/dev/null | cut -d= -f2)
 OAUTH_HOST ?= $(shell grep '^OAUTH_HOST=' /etc/vps-mcp/host.env 2>/dev/null | cut -d= -f2)
 
-# Parse "fqdn__email" stems
-fqdn_of  = $(word 1,$(subst __, ,$(1)))
-email_of = $(word 2,$(subst __, ,$(1)))
+# Parse "[IP__]fqdn__email" stems. The optional leading IP is the old server a
+# site moves from: the container starts in forward mode (port 443 passed
+# through to it, see container/systemd/vps-mcp-mode.sh).
+_words   = $(subst __, ,$(1))
+_three   = $(word 3,$(call _words,$(1)))
+fwd_of   = $(if $(call _three,$(1)),$(word 1,$(call _words,$(1))))
+fqdn_of  = $(if $(call _three,$(1)),$(word 2,$(call _words,$(1))),$(word 1,$(call _words,$(1))))
+email_of = $(if $(word 2,$(call _words,$(1))),$(lastword $(call _words,$(1))))
+
+# check_fwd IP — empty, or a dotted IPv4 address.
+define check_fwd
+	@test -z "$(1)" || echo "$(1)" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$$' || \
+	    { echo "Error: '$(1)' is not an IPv4 address (format: IP__hostname__email)."; exit 1; }
+endef
 
 # A literal comma, for $(call ...) arguments that contain one.
 , := ,
@@ -51,12 +62,20 @@ help:
 	@printf "  make pa-i.jp__bob@ex.com.done          VPS for bob at the domain apex\n"
 	@printf "  make list                              List VPS containers by domain\n\n"
 	@printf "Three-container sets (production / staging / development):\n"
-	@printf "  make shop.ksy.jp__alice@ex.com.create3 shop.ksy.jp (prod), shop-staging.ksy.jp,\n"
+	@printf "  make shop.ksy.jp__alice@ex.com.create3 shop.ksy.jp (prod), shop-stg.ksy.jp,\n"
 	@printf "                                         shop-dev.ksy.jp (the only one with MCP)\n"
-	@printf "  make shop.ksy.jp.to-stg                Send dev's committed HEAD to staging, make install\n"
-	@printf "  make shop.ksy.jp.to-prod               Show the full diff, ask, send staging's HEAD to prod\n"
+	@printf "  make shop.ksy.jp.dev2stg               Send dev's committed HEAD to staging, make install\n"
+	@printf "  make shop.ksy.jp.stg2prod              Show the full diff, ask, send staging's HEAD to prod\n"
 	@printf "  make shop.ksy.jp.list3                 Status and git HEAD of the three containers\n"
-	@printf "      For a domain apex (ksy.jp) the others are staging.ksy.jp and dev.ksy.jp.\n\n"
+	@printf "      For a domain apex (ksy.jp) the others are stg.ksy.jp and dev.ksy.jp.\n\n"
+	@printf "Moving a site from an old server without downtime (forward mode):\n"
+	@printf "  make 203.0.113.5__pa-i.org__alice@ex.com.done     (or .create3) start in forward mode:\n"
+	@printf "                            443 passes through to 203.0.113.5, 80 proxies to it\n"
+	@printf "  make pa-i.org.getcert     Let's Encrypt cert (+ names in /etc/vps-mcp/cert-names)\n"
+	@printf "                            once DNS points here; re-run to retry or add names\n"
+	@printf "  make pa-i.org.unforward   Serve 443 here; app.d/forward.conf still proxies the rest\n"
+	@printf "  make pa-i.org.forward     Back to forward mode (OLD=<IP> to change the target)\n"
+	@printf "  make pa-i.org.mode        Show mode and certificate\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
 	@printf "  make mcpupdate            Update ALL running MCP containers in place (stop + cp + npm install + start,\n"
@@ -417,9 +436,13 @@ endef
 %.done:
 	$(eval _FQDN  := $(shell echo '$(call fqdn_of,$*)' | tr A-Z a-z))
 	$(eval _EMAIL := $(call email_of,$*))
+	$(eval _FWD   := $(call fwd_of,$*))
 	$(eval _OAUTH := $(filter oauth.%,$(_FQDN)))
 	@test -n "$(_EMAIL)" || \
-	    { echo "Error: format is  <hostname>__<email>.done  e.g. test.ksy.jp__alice@gmail.com.done"; exit 1; }
+	    { echo "Error: format is  [<old server IP>__]<hostname>__<email>.done  e.g. test.ksy.jp__alice@gmail.com.done"; exit 1; }
+	$(call check_fwd,$(_FWD))
+	@test -z "$(_FWD)" || test -z "$(_OAUTH)" || \
+	    { echo "Error: the GitHub-login broker cannot start in forward mode."; exit 1; }
 	@test -n "$(IP)" || \
 	    { echo "Error: IP not set.  Run make <IP>.setupdone first."; exit 1; }
 	$(call check_fqdn,$(_FQDN))
@@ -430,7 +453,7 @@ endef
 	@test -n "$(_OAUTH)" || test -n "$(OAUTH_HOST)" || \
 	    { echo "Error: no GitHub-login broker yet.  Create it first: make oauth.<domain>__<email>.done"; exit 1; }
 	$(if $(_OAUTH),sed -i '/^OAUTH_HOST=/d' /etc/vps-mcp/host.env && echo "OAUTH_HOST=$(_FQDN)" >> /etc/vps-mcp/host.env)
-	$(call podman_run,$(_FQDN),$(_EMAIL),--env OAUTH_BASE=https://$(if $(_OAUTH),$(_FQDN),$(OAUTH_HOST)) $(if $(_OAUTH),--env-file /etc/vps-mcp/oauth.env,))
+	$(call podman_run,$(_FQDN),$(_EMAIL),--env OAUTH_BASE=https://$(if $(_OAUTH),$(_FQDN),$(OAUTH_HOST)) $(if $(_OAUTH),--env-file /etc/vps-mcp/oauth.env,) $(if $(_FWD),--env FORWARD=$(_FWD)))
 	@echo "Letting the proxy refresh its routing table for the new container..."
 	@sleep 10
 	$(call wait_proxy,$(_FQDN))
@@ -439,30 +462,32 @@ endef
 
 # ── three-container sets ──────────────────────────────────────────────────────
 # Usage: make shop.ksy.jp__alice@gmail.com.create3
-#        make shop.ksy.jp.to-stg
-#        make shop.ksy.jp.to-prod
+#        make shop.ksy.jp.dev2stg
+#        make shop.ksy.jp.stg2prod
 #        make shop.ksy.jp.list3
 #
 # One application gets three containers (stem = production hostname):
 #   shop.ksy.jp          production   no MCP   ROLE=prod
-#   shop-staging.ksy.jp  staging      no MCP   ROLE=staging
+#   shop-stg.ksy.jp  staging      no MCP   ROLE=stg
 #   shop-dev.ksy.jp      development  MCP      ROLE=dev
-# (for a domain apex ksy.jp: staging.ksy.jp and dev.ksy.jp). Claude works only
+# (for a domain apex ksy.jp: stg.ksy.jp and dev.ksy.jp). Claude works only
 # in the dev container and commits to its /srv/app; a person on the host sends
-# that commit to staging (to-stg), then staging's commit to production
-# (to-prod), and each runs `make -C /srv/app install` there. Claude's trial and
+# that commit to staging (dev2stg), then staging's commit to production
+# (stg2prod), and each runs `make -C /srv/app install` there. Claude's trial and
 # error therefore never reaches production. The dev container also sees the
-# staging filesystem read-only at /mnt/staging (OCI hook, see install-services)
+# staging filesystem read-only at /mnt/stg (OCI hook, see install-services)
 # and copies of staging's outgoing mail in /srv/stg-mail.
 #
-# After every transfer the dev repository records refs/remotes/staging/main and
-# refs/remotes/production/main, so Claude can tell what each server runs.
+# After every transfer the dev repository records refs/remotes/stg/main and
+# refs/remotes/prod/main, so Claude can tell what each server runs.
 
 %.create3:
 	$(call names3,$(call fqdn_of,$*))
 	$(eval _EMAIL := $(call email_of,$*))
+	$(eval _FWD   := $(call fwd_of,$*))
 	@test -n "$(_EMAIL)" || \
-	    { echo "Error: format is  <production hostname>__<email>.create3  e.g. shop.ksy.jp__alice@gmail.com.create3"; exit 1; }
+	    { echo "Error: format is  [<old server IP>__]<production hostname>__<email>.create3  e.g. shop.ksy.jp__alice@gmail.com.create3"; exit 1; }
+	$(call check_fwd,$(_FWD))
 	@test -n "$(IP)" || \
 	    { echo "Error: IP not set.  Run make <IP>.setupdone first."; exit 1; }
 	@test -n "$(OAUTH_HOST)" || \
@@ -476,9 +501,9 @@ endef
 	@systemctl is-active --quiet vps-mcp-view.service || \
 	    { echo "Error: vps-mcp-view.service is not active.  Run make install-services first."; exit 1; }
 	mkdir -p /run/vps-mcp/view/$(_S)
-	$(call podman_run,$(_P),$(_EMAIL),--env ROLE=prod)
-	$(call podman_run,$(_S),$(_EMAIL),--env ROLE=staging)
-	$(call podman_run,$(_D),$(_EMAIL),--env ROLE=dev --env OAUTH_BASE=https://$(OAUTH_HOST) -v /run/vps-mcp/view/$(_S):/mnt/staging:ro$(,)rslave)
+	$(call podman_run,$(_P),$(_EMAIL),--env ROLE=prod $(if $(_FWD),--env FORWARD=$(_FWD)))
+	$(call podman_run,$(_S),$(_EMAIL),--env ROLE=stg)
+	$(call podman_run,$(_D),$(_EMAIL),--env ROLE=dev $(if $(_FWD),--env FORWARD=$(_FWD)) --env OAUTH_BASE=https://$(OAUTH_HOST) -v /run/vps-mcp/view/$(_S):/mnt/stg:ro$(,)rslave)
 	@echo "Letting the proxy refresh its routing table for the new containers..."
 	@sleep 10
 	$(call wait_proxy,$(_P))
@@ -487,14 +512,14 @@ endef
 	podman exec $(_P)-web /usr/local/bin/vps-mcp-init.sh
 	podman exec $(_S)-web /usr/local/bin/vps-mcp-init.sh
 	podman exec $(_D)-web /usr/local/bin/vps-mcp-init.sh
-	@$(MAKE) --no-print-directory $(_P).to-stg
-	@$(MAKE) --no-print-directory $(_P).to-prod YES=1
+	@$(MAKE) --no-print-directory $(_P).dev2stg
+	@$(MAKE) --no-print-directory $(_P).stg2prod YES=1
 	@touch $@
 
 # Send dev's committed HEAD to staging and install it there. Staging follows
 # whatever is sent (it may move backwards, e.g. a hotfix branched from
-# production/main), but stops if staging's /srv/app was edited by hand.
-%.to-stg:
+# prod/main), but stops if staging's /srv/app was edited by hand.
+%.dev2stg:
 	$(call names3,$*)
 	@set -e; \
 	for c in $(_D) $(_S); do \
@@ -507,9 +532,9 @@ endef
 	fi; \
 	echo "==> $(_D)-web  ->  $(_S)-web"; \
 	h=$$(podman exec $(_D)-web git -C /srv/app bundle create -q - HEAD \
-	     | podman exec -i $(_S)-web /usr/local/bin/vps-mcp-recv.sh staging); \
-	podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/staging/main $$h; \
-	echo "    staging/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
+	     | podman exec -i $(_S)-web /usr/local/bin/vps-mcp-recv.sh stg); \
+	podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/stg/main $$h; \
+	echo "    stg/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
 	echo "==> make install on $(_S)-web"; \
 	podman exec $(_S)-web make -C /srv/app install
 
@@ -517,7 +542,7 @@ endef
 # commit and the full diff that production will receive and asking for
 # confirmation (YES=1 skips the question; create3 uses it for the skeleton).
 # Production only fast-forwards and stops if its /srv/app was edited by hand.
-%.to-prod:
+%.stg2prod:
 	$(call names3,$*)
 	@set -e; \
 	for c in $(_D) $(_S) $(_P); do \
@@ -547,13 +572,13 @@ endef
 	echo "==> $(_S)-web  ->  $(_P)-web"; \
 	h=$$(podman exec $(_S)-web git -C /srv/app bundle create -q - HEAD \
 	     | podman exec -i $(_P)-web /usr/local/bin/vps-mcp-recv.sh prod); \
-	podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/production/main $$h; \
-	echo "    production/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
+	podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/prod/main $$h; \
+	echo "    prod/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
 	echo "==> make install on $(_P)-web"; \
 	podman exec $(_P)-web make -C /srv/app install
 
 # Status and git HEAD of the three containers, then dev's recent history with
-# the staging/main and production/main markers.
+# the stg/main and prod/main markers.
 %.list3:
 	$(call names3,$*)
 	@for c in $(_P) $(_S) $(_D); do \
@@ -566,7 +591,52 @@ endef
 	    fi; \
 	done; \
 	echo; \
+	podman exec $(_P)-web /usr/local/bin/vps-mcp-mode.sh status 2>/dev/null | sed 's/^/$(_P): /' || true; \
+	echo; \
 	podman exec $(_D)-web git -C /srv/app log --oneline --decorate --all -10 2>/dev/null || true
+
+# ── certificate and forward mode (moving a site from an old server) ──────────
+# Usage: make 203.0.113.5__pa-i.org__alice@gmail.com.done      (or .create3)
+#        ... point the domain's DNS at this host ...
+#        make pa-i.org.getcert
+#        make pa-i.org.unforward
+#
+# A container created with a leading IP starts in forward mode: port 443 is
+# passed through, still encrypted, to that old server (which keeps serving with
+# its own certificate), and port 80 proxies to it except for ACME challenges.
+# The container can therefore obtain its own certificate as soon as DNS points
+# here, without the site going down. unforward then lets the container serve
+# 443; what it does not serve yet still goes to the old server through
+# app.d/forward.conf (seeded at creation; for a create3 set it lives in the dev
+# repository and reaches production with dev2stg / stg2prod), which Claude
+# narrows as parts move. All of this runs inside the container
+# (vps-mcp-mode.sh); the host only runs podman exec.
+#
+#   <host>.getcert     Let's Encrypt certificate for <host> plus, on a
+#                      production / standalone container, the names in its
+#                      /etc/vps-mcp/cert-names (one certificate). Re-run when
+#                      a name is added or a first attempt failed.
+#   <host>.unforward   leave forward mode (refused without a valid certificate)
+#   <host>.forward     back to forward mode; OLD=<IP> changes the target
+#   <host>.mode        show mode, forward target and certificate
+%.getcert:
+	@podman container exists $*-web || { echo "Error: container $*-web not found."; exit 1; }
+	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh getcert
+	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
+
+%.unforward:
+	@podman container exists $*-web || { echo "Error: container $*-web not found."; exit 1; }
+	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh unforward
+	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
+
+%.forward:
+	@podman container exists $*-web || { echo "Error: container $*-web not found."; exit 1; }
+	$(call check_fwd,$(OLD))
+	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh forward $(OLD)
+	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
+
+%.mode:
+	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
 
 # ── list ──────────────────────────────────────────────────────────────────────
 
@@ -606,7 +676,7 @@ mcpupdate:
 	    h=$${c%-web}; \
 	    : 'Staging/production of a create3 set run no MCP server; the set is'; \
 	    : 'updated through its dev container, which this loop also visits.'; \
-	    case $$h in *-staging.*|staging.*) continue ;; esac; \
+	    case $$h in *-stg.*|stg.*) continue ;; esac; \
 	    d=$$(sh scripts/names3.sh $$h | cut -d' ' -f3); \
 	    podman container exists $$d-web && continue; \
 	    $(MAKE) --no-print-directory $$h.mcpupdate; \
@@ -642,7 +712,7 @@ checkall:
 %.mcpupdate:
 	@set -e; \
 	c="$*-web"; \
-	case "$*" in *-staging.*|staging.*) echo "$$c: staging container (no MCP); skipped."; exit 0 ;; esac; \
+	case "$*" in *-stg.*|stg.*) echo "$$c: staging container (no MCP); skipped."; exit 0 ;; esac; \
 	d=$$(sh scripts/names3.sh $* | cut -d' ' -f3); \
 	if podman container exists $$d-web; then \
 	    echo "$$c is the production container of a create3 set; updating its dev container $$d-web."; \

@@ -2,7 +2,7 @@
 #     make -C /srv/app install
 #
 # The same commit is installed on development, staging and production (the
-# host sends it with `make <fqdn>.to-stg` / `make <fqdn>.to-prod`), so this
+# host sends it with `make <fqdn>.dev2stg` / `make <fqdn>.stg2prod`), so this
 # Makefile must work on a container that has only what the image provides plus
 # what this repository installs. Keep it idempotent and stop on the first error.
 SHELL := /bin/bash
