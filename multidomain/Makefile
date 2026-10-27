@@ -262,9 +262,11 @@ install-services:
 	systemctl enable --now vps-proxy443.socket vps-proxy80.socket
 	mkdir -p /etc/nftables.d; \
 	UID443=$$(id -u proxy443); UID80=$$(id -u proxy80); UID_POSTFIX=$$(id -u postfix); \
+	UID_NAMED=$$(id -u named 2>/dev/null || id -u bind 2>/dev/null || echo 0); \
 	sed -e "s|__UID_PROXY443__|$$UID443|g" \
 	    -e "s|__UID_PROXY80__|$$UID80|g" \
 	    -e "s|__UID_POSTFIX__|$$UID_POSTFIX|g" \
+	    -e "s|__UID_NAMED__|$$UID_NAMED|g" \
 	    host/nftables/vps-mcp.nft.tmpl > /etc/nftables.d/vps-mcp.nft
 	grep -qF 'include "/etc/nftables.d/*.nft"' /etc/nftables.conf 2>/dev/null || \
 	    printf '\ninclude "/etc/nftables.d/*.nft"\n' >> /etc/nftables.conf

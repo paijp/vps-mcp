@@ -74,9 +74,11 @@ render_nft() {
     uid443=$(id -u proxy443 2>/dev/null || echo __UID_PROXY443__)
     uid80=$(id -u proxy80  2>/dev/null || echo __UID_PROXY80__)
     uid_postfix=$(id -u postfix 2>/dev/null || echo __UID_POSTFIX__)
+    uid_named=$(id -u named 2>/dev/null || id -u bind 2>/dev/null || echo 0)
     sed -e "s|__UID_PROXY443__|$uid443|g" \
         -e "s|__UID_PROXY80__|$uid80|g" \
-        -e "s|__UID_POSTFIX__|$uid_postfix|g" "$1"
+        -e "s|__UID_POSTFIX__|$uid_postfix|g" \
+        -e "s|__UID_NAMED__|$uid_named|g" "$1"
 }
 
 check_pair() {

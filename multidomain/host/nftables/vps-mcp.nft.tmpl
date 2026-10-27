@@ -78,6 +78,12 @@ table inet vps-mcp {
         # Postfix mail relay: unrestricted outbound for DNS lookups and SMTP delivery.
         meta skuid __UID_POSTFIX__ accept
 
+        # BIND (authoritative only): NOTIFY to the secondary DNS and the lookups
+        # of the secondaries' addresses. DNS ports only; without this, zone
+        # changes reach the secondaries only at their next SOA refresh.
+        meta skuid __UID_NAMED__ udp dport 53 accept
+        meta skuid __UID_NAMED__ tcp dport 53 accept
+
         # Allow responses to connections already established by allowed users.
         ct state established,related accept
 
