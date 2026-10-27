@@ -510,7 +510,7 @@ endef
 	mkdir -p /run/vps-mcp/view/$(_S)
 	$(call podman_run,$(_P),$(_EMAIL),--env ROLE=prod $(if $(_FWD),--env FORWARD=$(_FWD)))
 	$(call podman_run,$(_S),$(_EMAIL),--env ROLE=stg)
-	$(call podman_run,$(_D),$(_EMAIL),--env ROLE=dev $(if $(_FWD),--env FORWARD=$(_FWD)) --env OAUTH_BASE=https://$(OAUTH_HOST) -v /run/vps-mcp/view/$(_S):/mnt/stg:ro$(,)rslave)
+	$(call podman_run,$(_D),$(_EMAIL),--env ROLE=dev $(if $(_FWD),--env FORWARD=$(_FWD)) --env OAUTH_BASE=https://$(OAUTH_HOST) -v /run/vps-mcp/view/$(_S):/mnt/stg:ro$(,)rslave -v $(_S)-journal:/mnt/stg-journal:ro)
 	@echo "Letting the proxy refresh its routing table for the new containers..."
 	@sleep 10
 	$(call wait_proxy,$(_P))

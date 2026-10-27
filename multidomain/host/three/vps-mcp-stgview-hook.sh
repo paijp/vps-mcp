@@ -9,10 +9,7 @@
 #              (one `mount --bind -o ro`: the mount is read-only before it
 #              becomes visible, so the copy propagated into the dev container
 #              is read-only too — a bind followed by a ro remount is not)
-#              and, on top of it, the container's /var/log/journal: Podman
-#              mounts its own tmpfs (or the journal volume) there in systemd
-#              mode, which a bind of the rootfs alone does not include
-#   poststop   remove those binds, so a stopped or deleted staging container is
+#   poststop   remove that bind, so a stopped or deleted staging container is
 #              never shown with stale content
 # Every action is logged: journalctl -t vps-mcp-stgview
 #
@@ -31,17 +28,12 @@ id=$(printf '%s' "$state" | jq -r .id 2>/dev/null | cut -c1-12)
 case ${1:-} in
 poststart)
     root=$(jq -r .root.path "$bundle/config.json" 2>/dev/null)
-    pid=$(printf '%s' "$state" | jq -r .pid 2>/dev/null)
     mkdir -p "$V/$host"
-    mountpoint -q "$V/$host" && umount -R "$V/$host"
-    if [ -d "$root" ] && mount --bind -o ro "$root" "$V/$host"; then r=ok; else r=FAILED; fi
-    j=/proc/$pid/root/var/log/journal
-    if [ $r = ok ] && [ -d "$j" ] && [ -d "$V/$host/var/log/journal" ]; then
-        if mount --bind -o ro "$j" "$V/$host/var/log/journal"; then r="$r journal=ok"; else r="$r journal=FAILED"; fi
-    fi ;;
+    mountpoint -q "$V/$host" && umount "$V/$host"
+    if [ -d "$root" ] && mount --bind -o ro "$root" "$V/$host"; then r=ok; else r=FAILED; fi ;;
 poststop)
     if mountpoint -q "$V/$host"; then
-        if umount -R "$V/$host"; then r=ok; else r=FAILED; fi
+        if umount "$V/$host"; then r=ok; else r=FAILED; fi
     else
         r=not-mounted
     fi ;;
