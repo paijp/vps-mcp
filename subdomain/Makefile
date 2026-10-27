@@ -32,10 +32,10 @@ help:
 	@printf "  make install-binaries     Build and install Go proxy binaries\n"
 	@printf "  make install-services     (Re)install socket units and nftables\n\n"
 	@printf "Container management:\n"
-	@printf "  make oauth__admin@ex.com.done      Create GitHub-login broker (needs /etc/vps-mcp/oauth.env)\n"
-	@printf "  make alice__alice@ex.com.done      Create VPS for alice\n"
-	@printf "  make default__admin@ex.com.done    Create default container (serves parent domain)\n"
-	@printf "  make list                          List running VPS containers\n\n"
+	@printf "  make oauth__admin@example.com.done     Create GitHub-login broker (needs /etc/vps-mcp/oauth.env)\n"
+	@printf "  make alice__alice@example.com.done     Create VPS for alice\n"
+	@printf "  make default__admin@example.com.done   Create default container (serves parent domain)\n"
+	@printf "  make list                              List running VPS containers\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
 	@printf "  make mcpupdate            Update ALL running containers in place (stop + cp + npm install + start,\n"
@@ -274,9 +274,9 @@ sshsec.done:
 	@touch $@
 
 # ── container creation ────────────────────────────────────────────────────────
-# Usage: make alice__alice@gmail.com.done
-#        make default__admin@gmail.com.done   (serves parent domain, not default.DOMAIN)
-#        make oauth__admin@gmail.com.done     (GitHub-login broker; needs
+# Usage: make alice__alice@example.com.done
+#        make default__admin@example.com.done   (serves parent domain, not default.DOMAIN)
+#        make oauth__admin@example.com.done     (GitHub-login broker; needs
 #                                              /etc/vps-mcp/oauth.env, see below)
 # DOMAIN is read automatically from /etc/vps-mcp/host.env after setupdone.
 #

@@ -1,8 +1,8 @@
 # vps-mcp — multidomain edition
 
 Podman-based VPS environment that hosts **several domains on one server**
-(e.g. `test.ksy.jp` and `pa-i.jp` side by side). Each container serves one
-full hostname and is named after it (`test.ksy.jp-web`, `pa-i.jp-web`); it runs
+(e.g. `test.example.org` and `example.net` side by side). Each container serves one
+full hostname and is named after it (`test.example.org-web`, `example.net-web`); it runs
 Rocky Linux with an MCP server that lets Claude.ai manage files and run shell
 commands. One GitHub OAuth App and one login broker serve every domain.
 
@@ -26,7 +26,7 @@ Internet
 ```
 
 - **BIND9** is the primary authoritative server for every registered domain (`make <domain>.dnsdone`).
-- **vps-proxy** reads the TLS ClientHello SNI and maps `test.ksy.jp` → container `test.ksy.jp-web` when `ksy.jp` is listed in `/etc/vps-mcp/domains` (the domain itself or one label below it). Unknown names under a domain fall back to the domain's apex container (`ksy.jp-web`), if any. It TCP-proxies without decryption and injects PROXY protocol v1 so nginx sees the real client IP.
+- **vps-proxy** reads the TLS ClientHello SNI and maps `test.example.org` → container `test.example.org-web` when `example.org` is listed in `/etc/vps-mcp/domains` (the domain itself or one label below it). Unknown names under a domain fall back to the domain's apex container (`example.org-web`), if any. It TCP-proxies without decryption and injects PROXY protocol v1 so nginx sees the real client IP.
 - **vps-proxy-http** does the same with the HTTP `Host` header.
 - Both proxies re-read `/etc/vps-mcp/domains` when it changes — no restart after adding a domain.
 - **list-containers** (setuid-root) queries the Podman socket to build the container→IP routing table used by both proxies.
@@ -122,9 +122,9 @@ Each domain has a records file `<domain>.dns` next to the Makefile (git-ignored;
 `example.com.dns` is the committed sample):
 
 ```sh
-cp example.com.dns ksy.jp.dns
-vi ksy.jp.dns            # MX, TXT, CNAME, ... (names relative to the domain)
-make ksy.jp.dnsdone      # first run registers, later runs update
+cp example.com.dns example.org.dns
+vi example.org.dns            # MX, TXT, CNAME, ... (names relative to the domain)
+make example.org.dnsdone      # first run registers, later runs update
 ```
 
 The zone is built from two parts:
@@ -153,7 +153,7 @@ the domain to `/etc/vps-mcp/domains` so the proxies start routing it.
 
 ```sh
 make domains             # registered domains and zone serials
-make ksy.jp.undns        # remove the zone (refused while containers use it;
+make example.org.undns        # remove the zone (refused while containers use it;
                          #   the DKIM key is kept for re-registration)
 ```
 
@@ -161,17 +161,17 @@ make ksy.jp.undns        # remove the zone (refused while containers use it;
 > server and register the zone with the secondary DNS (`ns1/ns2.dns.ne.jp`,
 > see `host/bind/named.conf.local.tmpl`). Every zone uses `ns1.<domain>` as its
 > primary NS by default, which needs a glue record per domain. To share one, add
-> `NS1=ns1.ksy.jp` to `/etc/vps-mcp/host.env` before registering the others.
+> `NS1=ns1.example.org` to `/etc/vps-mcp/host.env` before registering the others.
 
 ## GitHub login broker (one-time setup)
 
 Authentication uses real GitHub OAuth. Register one GitHub OAuth App and run a
 single broker container that serves logins for **every domain on the host**.
-Its hostname may be under any registered domain; `oauth.ksy.jp` is used below.
+Its hostname may be under any registered domain; `oauth.example.org` is used below.
 
 1. Create a GitHub OAuth App (Settings → Developer settings → OAuth Apps → New):
-   - **Homepage URL**: `https://oauth.ksy.jp`
-   - **Authorization callback URL**: `https://oauth.ksy.jp/mcp/callback`
+   - **Homepage URL**: `https://oauth.example.org`
+   - **Authorization callback URL**: `https://oauth.example.org/mcp/callback`
 2. Fill in `/etc/vps-mcp/oauth.env` (host setup already created it as a mode-600
    template; edit in the real values):
    ```
@@ -180,17 +180,17 @@ Its hostname may be under any registered domain; `oauth.ksy.jp` is used below.
    ```
 3. Create the broker container (it is the only one holding the GitHub secret):
    ```sh
-   make oauth.ksy.jp__admin@gmail.com.done
+   make oauth.example.org__admin@example.com.done
    ```
    Its hostname is saved as `OAUTH_HOST` in `host.env`; a second broker is refused.
 
-Every other container, on any domain, learns only `OAUTH_BASE=https://oauth.ksy.jp`.
+Every other container, on any domain, learns only `OAUTH_BASE=https://oauth.example.org`.
 
 ## Creating a VPS container
 
 ```sh
-make test.ksy.jp__alice@gmail.com.done    # container test.ksy.jp-web
-make pa-i.jp__bob@gmail.com.done          # domain apex: container pa-i.jp-web
+make test.example.org__alice@example.com.done    # container test.example.org-web
+make example.net__bob@example.com.done          # domain apex: container example.net-web
 ```
 
 The hostname must be a registered domain or one label below it, and the broker
@@ -206,7 +206,7 @@ must exist first. This:
    - Switches nginx to the live certificate
    - Runs `systemctl enable --now mcp-server`
    - Sends a creation notification email to `NOTIFY_EMAIL` from `noreply@<hostname>`
-4. Creates `test.ksy.jp__alice@gmail.com.done` to record completion
+4. Creates `test.example.org__alice@example.com.done` to record completion
 
 Access is granted by **GitHub login**: a user only obtains a Bearer token if they
 log in with a GitHub account whose verified primary email matches `NOTIFY_EMAIL`.
@@ -220,8 +220,8 @@ make list
 Delete a container (manual):
 
 ```sh
-podman stop test.ksy.jp-web && podman rm test.ksy.jp-web
-rm -f test.ksy.jp__alice@gmail.com.done
+podman stop test.example.org-web && podman rm test.example.org-web
+rm -f test.example.org__alice@example.com.done
 ```
 
 ## Three-container sets (production / staging / development)
@@ -232,35 +232,35 @@ image:
 
 | Hostname | Role | MCP | Updated by |
 |---|---|---|---|
-| `shop.ksy.jp` | production | no | a person on the host: `make shop.ksy.jp.stg2prod` |
-| `shop-stg.ksy.jp` | staging (checks that the Makefile works) | no | a person on the host: `make shop.ksy.jp.dev2stg` |
-| `shop-dev.ksy.jp` | development | yes | Claude, through the MCP connector |
+| `shop.example.org` | production | no | a person on the host: `make shop.example.org.stg2prod` |
+| `shop-stg.example.org` | staging (checks that the Makefile works) | no | a person on the host: `make shop.example.org.dev2stg` |
+| `shop-dev.example.org` | development | yes | Claude, through the MCP connector |
 
-For a domain apex (`ksy.jp`) the others are `stg.ksy.jp` and `dev.ksy.jp`.
+For a domain apex (`example.org`) the others are `stg.example.org` and `dev.example.org`.
 Do not use `-stg` / `-dev` labels (or `stg` / `dev` under an apex) for
 anything else: the mail copy and the staging view below select containers by
 these names.
 
 ```sh
 make install-services                   # once per host (also after a git pull)
-make shop.ksy.jp__alice@gmail.com.create3
+make shop.example.org__alice@example.com.create3
 ```
 
 `create3` creates the three containers, runs the usual first-boot init on each
 (certificate, Postfix; MCP only on dev), puts a skeleton repository in the dev
 container's `/srv/app` (`CLAUDE.md`, `Makefile`, `files/`) and sends it through
 staging to production, so all three share one git history from the start.
-Register only the dev container as a connector (`https://shop-dev.ksy.jp/mcp/sse`).
+Register only the dev container as a connector (`https://shop-dev.example.org/mcp/sse`).
 
 ### Workflow
 
 1. Claude edits `/srv/app` in the dev container, tries it with `make install`,
    and commits. `/srv/app/CLAUDE.md` explains the conventions to Claude.
-2. `make shop.ksy.jp.dev2stg` sends dev's committed HEAD to staging (refused if
+2. `make shop.example.org.dev2stg` sends dev's committed HEAD to staging (refused if
    dev has uncommitted changes, or if staging's `/srv/app` was edited by hand)
    and runs `make -C /srv/app install` there. On failure, `install` prints
    diagnostics; hand them to Claude.
-3. `make shop.ksy.jp.stg2prod` shows the commits and the changed files
+3. `make shop.example.org.stg2prod` shows the commits and the changed files
    (`git diff --stat`) production will receive (`DIFF=1` adds the full diff),
    asks for confirmation, sends **staging's** HEAD (so production gets exactly
    what staging ran, even if dev has moved on), fast-forward only, and runs
@@ -269,7 +269,7 @@ Register only the dev container as a connector (`https://shop-dev.ksy.jp/mcp/sse
    deployed. When production already runs staging's HEAD (for example after
    an `install` that stopped on a missing hand-placed file), nothing is sent
    and `make install` runs again.
-4. `make shop.ksy.jp.list3` shows the three containers and their HEADs.
+4. `make shop.example.org.list3` shows the three containers and their HEADs.
 
 After each transfer the dev repository records `stg/main` and
 `prod/main` (remote-tracking refs), so Claude can see what each server
@@ -307,7 +307,7 @@ way anything reaches them is a person running `make` on the host.
 | `vps-mcp-stgmail-retry.timer` | retry copies held while the dev container was down |
 
 `make mcpupdate` updates the dev container of a set and skips its staging and
-production; `make shop.ksy.jp.mcpupdate` updates `shop-dev.ksy.jp`.
+production; `make shop.example.org.mcpupdate` updates `shop-dev.example.org`.
 
 ## nginx layout: `mcp.d/` and `app.d/`
 
@@ -358,8 +358,8 @@ A container created with the old server's IP in front of its name starts in
 **forward mode**, so a site can move here without going down:
 
 ```sh
-make 153.126.216.5__pa-i.org__alice@gmail.com.done      # one container (MCP inside)
-make 153.126.216.5__pa-i.org__alice@gmail.com.create3   # or a set: only production forwards
+make 203.0.113.5__example.net__alice@example.com.done      # one container (MCP inside)
+make 203.0.113.5__example.net__alice@example.com.create3   # or a set: only production forwards
 ```
 
 | Port | Forward mode | After `unforward` |
@@ -375,11 +375,11 @@ The usual sequence:
 2. Point the domain's DNS at this host (e.g. switch the Sakura zone to a
    secondary of this host). Visitors keep reaching the old site through the
    passthrough.
-3. `make pa-i.org.getcert` — one Let's Encrypt certificate for the hostname and,
+3. `make example.net.getcert` — one Let's Encrypt certificate for the hostname and,
    on a production or standalone container, every name in
    `/etc/vps-mcp/cert-names` (e.g. `www` and redirect-only names that reach the
    apex container). Re-run to add a name or after a failure.
-4. `make pa-i.org.unforward` (refused until step 3 succeeded). This container
+4. `make example.net.unforward` (refused until step 3 succeeded). This container
    now serves 443: the MCP server and everything ported answer here, the rest
    still goes to the old server through `app.d/forward.conf`.
 5. Port the remaining parts; narrow `forward.conf`, and delete it when nothing
@@ -387,8 +387,8 @@ The usual sequence:
    repository (`files/`), seeded at creation, and reach production with
    `dev2stg` / `stg2prod` like any other change.
 
-`make pa-i.org.forward` (optionally `OLD=<IP>`) returns to forward mode and
-`make pa-i.org.mode` shows the mode and certificate. Everything runs inside the
+`make example.net.forward` (optionally `OLD=<IP>`) returns to forward mode and
+`make example.net.mode` shows the mode and certificate. Everything runs inside the
 container (`/usr/local/bin/vps-mcp-mode.sh`); the host only runs `podman exec`
 — nothing on the host proxies traffic. The old server sees every request
 coming from this host's address (no PROXY header is passed on). In forward
@@ -402,12 +402,12 @@ After the container is created:
 1. The creation notification email arrives at `NOTIFY_EMAIL` (confirms the mail path works).
 2. Add the MCP connector in Claude.ai with the SSE URL:
    ```
-   https://test.ksy.jp/mcp/sse
+   https://test.example.org/mcp/sse
    ```
 3. Claude.ai opens the authorization page, which redirects to GitHub. Log in with
    the GitHub account whose verified primary email is `NOTIFY_EMAIL`.
 4. On a successful email match, a token-issuance notification email is sent from
-   `noreply@test.ksy.jp` to `NOTIFY_EMAIL`.
+   `noreply@test.example.org` to `NOTIFY_EMAIL`.
 5. Claude.ai connects and the tools become available: `exec_command`, `read_file`, `write_file`, `nginx_reload` (use the latter instead of reloading nginx through `exec_command`, which would interrupt the SSE connection), and `deploy_setup` (see below).
 
 The login flow is PKCE-protected (S256): the GitHub authorization code is consumed
@@ -450,7 +450,7 @@ into each container. A rollout has two independent scopes — run **both**:
 make image               # rebuild the image → only containers created afterwards
 make mcpupdate           # patch every running container in place (stop + cp + npm install/update + start,
                          #   plus any missing diagnostic tool: ss, ps, lsof, sqlite3, jq)
-make test.ksy.jp.mcpupdate  # patch a single container (stem → <stem>-web)
+make test.example.org.mcpupdate  # patch a single container (stem → <stem>-web)
 ```
 
 `mcpupdate` patches in place (not recreate) because each container holds

@@ -1,8 +1,8 @@
 #!/bin/sh
 # names3.sh FQDN — print "<production> <staging> <dev>" hostnames of the
 # create3 set whose production hostname is FQDN:
-#   shop.ksy.jp  →  shop.ksy.jp  shop-stg.ksy.jp  shop-dev.ksy.jp
-#   ksy.jp       →  ksy.jp       stg.ksy.jp       dev.ksy.jp
+#   shop.example.org  →  shop.example.org  shop-stg.example.org  shop-dev.example.org
+#   example.org       →  example.org       stg.example.org       dev.example.org
 # (a registered domain apex — see /etc/vps-mcp/domains — has no label to
 # extend, so its staging/dev take the reserved labels "stg" and "dev").
 p=$(printf '%s' "${1:-}" | tr 'A-Z' 'a-z')

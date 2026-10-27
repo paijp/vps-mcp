@@ -46,41 +46,47 @@ help:
 	@printf "Optional hardening:\n"
 	@printf "  make sshsec.done          Disable SSH password auth + install fail2ban\n\n"
 	@printf "Domains (DNS zones):\n"
-	@printf "  cp example.com.dns ksy.jp.dns; vi ksy.jp.dns\n"
-	@printf "  make ksy.jp.dnsdone       Register or update the zone from ksy.jp.dns\n"
-	@printf "                            (re-runs only when ksy.jp.dns changed)\n"
-	@printf "  make ksy.jp.undns         Remove the zone (no container may use it)\n"
-	@printf "  make domains              List registered domains and zone serials\n\n"
+	@printf "  cp example.com.dns example.org.dns; vi example.org.dns\n"
+	@printf "  make example.org.dnsdone        Register or update the zone from example.org.dns\n"
+	@printf "                                  (re-runs only when example.org.dns changed)\n"
+	@printf "  make example.org.undns          Remove the zone (no container may use it)\n"
+	@printf "  make domains                    List registered domains and zone serials\n\n"
 	@printf "Rebuild components individually:\n"
-	@printf "  make image                Build container image\n"
-	@printf "  make install-binaries     Build and install Go proxy binaries\n"
-	@printf "  make install-services     (Re)install socket units and nftables\n\n"
+	@printf "  make image                      Build container image\n"
+	@printf "  make install-binaries           Build and install Go proxy binaries\n"
+	@printf "  make install-services           (Re)install socket units and nftables\n\n"
 	@printf "Container management (container name = <hostname>-web):\n"
-	@printf "  make oauth.ksy.jp__admin@ex.com.done   GitHub-login broker, one per host\n"
-	@printf "                                         (needs /etc/vps-mcp/oauth.env)\n"
-	@printf "  make test.ksy.jp__alice@ex.com.done    VPS for alice at test.ksy.jp\n"
-	@printf "  make pa-i.jp__bob@ex.com.done          VPS for bob at the domain apex\n"
-	@printf "  make list                              List VPS containers by domain\n\n"
+	@printf "  make oauth.example.org__admin@example.com.done\n"
+	@printf "                                  GitHub-login broker, one per host\n"
+	@printf "                                  (needs /etc/vps-mcp/oauth.env)\n"
+	@printf "  make test.example.org__alice@example.com.done\n"
+	@printf "                                  VPS for alice at test.example.org\n"
+	@printf "  make example.net__bob@example.com.done\n"
+	@printf "                                  VPS for bob at the domain apex\n"
+	@printf "  make list                       List VPS containers by domain\n\n"
 	@printf "Three-container sets (production / staging / development):\n"
-	@printf "  make shop.ksy.jp__alice@ex.com.create3 shop.ksy.jp (prod), shop-stg.ksy.jp,\n"
-	@printf "                                         shop-dev.ksy.jp (the only one with MCP)\n"
-	@printf "  make shop.ksy.jp.dev2stg               Send dev's committed HEAD to staging, make install\n"
-	@printf "  make shop.ksy.jp.stg2prod              Show commits/stat (DIFF=1: full diff), ask, send staging's HEAD to prod\n"
-	@printf "  make shop.ksy.jp.list3                 Status and git HEAD of the three containers\n"
-	@printf "      For a domain apex (ksy.jp) the others are stg.ksy.jp and dev.ksy.jp.\n\n"
+	@printf "  make shop.example.org__alice@example.com.create3\n"
+	@printf "                                  shop.example.org (prod), shop-stg.example.org,\n"
+	@printf "                                  shop-dev.example.org (the only one with MCP)\n"
+	@printf "  make shop.example.org.dev2stg   Send dev's committed HEAD to staging, make install\n"
+	@printf "  make shop.example.org.stg2prod  Show commits/stat (DIFF=1: full diff), ask,\n"
+	@printf "                                  send staging's HEAD to production\n"
+	@printf "  make shop.example.org.list3     Status and git HEAD of the three containers\n"
+	@printf "      For a domain apex (example.org) the others are stg.example.org and dev.example.org.\n\n"
 	@printf "Moving a site from an old server without downtime (forward mode):\n"
-	@printf "  make 203.0.113.5__pa-i.org__alice@ex.com.done     (or .create3) start in forward mode:\n"
-	@printf "                            443 passes through to 203.0.113.5, 80 proxies to it\n"
-	@printf "  make pa-i.org.getcert     Let's Encrypt cert (+ names in /etc/vps-mcp/cert-names)\n"
-	@printf "                            once DNS points here; re-run to retry or add names\n"
-	@printf "  make pa-i.org.unforward   Serve 443 here; app.d/forward.conf still proxies the rest\n"
-	@printf "  make pa-i.org.forward     Back to forward mode (OLD=<IP> to change the target)\n"
-	@printf "  make pa-i.org.mode        Show mode and certificate\n\n"
+	@printf "  make 203.0.113.5__example.net__alice@example.com.done\n"
+	@printf "                                  (or .create3) start in forward mode:\n"
+	@printf "                                  443 passes through to 203.0.113.5, 80 proxies to it\n"
+	@printf "  make example.net.getcert        Let's Encrypt cert (+ names in /etc/vps-mcp/cert-names)\n"
+	@printf "                                  once DNS points here; re-run to retry or add names\n"
+	@printf "  make example.net.unforward      Serve 443 here; app.d/forward.conf still proxies the rest\n"
+	@printf "  make example.net.forward        Back to forward mode (OLD=<IP> to change the target)\n"
+	@printf "  make example.net.mode           Show mode and certificate\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
 	@printf "  make mcpupdate            Update ALL running MCP containers in place (stop + cp + npm install + start,\n"
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
-	@printf "  make test.ksy.jp.mcpupdate  Update a single running container (stem -> <stem>-web;\n"
+	@printf "  make test.example.org.mcpupdate  Update a single running container (stem -> <stem>-web;\n"
 	@printf "                            for a create3 set its dev container; staging is skipped)\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
 	@printf "Check installed files against this checkout:\n"
@@ -93,13 +99,13 @@ help:
 	@printf "      and reports any missing diagnostic tool (ss/ps/lsof/sqlite3/jq).\n"
 	@printf "  make checkall\n"
 	@printf "      Same checks, but print the full diff for EVERY differing file.\n"
-	@printf "  make test.ksy.jp.check\n"
+	@printf "  make test.example.org.check\n"
 	@printf "      Verbose check of a single container (stem -> <stem>-web);\n"
 	@printf "      skips the host-side checks.\n\n"
 	@printf "Variables:\n"
 	@printf "  IMAGE   Container image tag (default: vps-mcp:latest)\n"
 	@printf "  NS1     Primary NS hostname written into every zone (default ns1.<domain>;\n"
-	@printf "          set NS1=ns1.ksy.jp in host.env to share one glue record)\n"
+	@printf "          set NS1=ns1.example.org in host.env to share one glue record)\n"
 
 # ── host setup ────────────────────────────────────────────────────────────────
 # Usage: make 203.0.113.1.setupdone
@@ -349,7 +355,7 @@ sshsec.done:
 	@touch $@
 
 # ── DNS zones ─────────────────────────────────────────────────────────────────
-# Usage: cp example.com.dns ksy.jp.dns; vi ksy.jp.dns; make ksy.jp.dnsdone
+# Usage: cp example.com.dns example.org.dns; vi example.org.dns; make example.org.dnsdone
 #
 # <domain>.dns holds the operator-managed records (MX, TXT, CNAME, ...); the
 # host-managed part (SOA, NS, @/*/ns1 A, SPF, DMARC, DKIM) comes from
@@ -379,9 +385,9 @@ domains:
 	done < /etc/vps-mcp/domains
 
 # ── container creation ────────────────────────────────────────────────────────
-# Usage: make test.ksy.jp__alice@gmail.com.done   (container test.ksy.jp-web)
-#        make pa-i.jp__bob@gmail.com.done         (domain apex: pa-i.jp-web)
-#        make oauth.ksy.jp__admin@gmail.com.done  (GitHub-login broker; needs
+# Usage: make test.example.org__alice@example.com.done   (container test.example.org-web)
+#        make example.net__bob@example.com.done         (domain apex: example.net-web)
+#        make oauth.example.org__admin@example.com.done  (GitHub-login broker; needs
 #                                                  /etc/vps-mcp/oauth.env)
 # The hostname must be a registered domain (make <domain>.dnsdone) or one
 # label below it. Unknown names under a domain are served by its apex
@@ -446,7 +452,7 @@ endef
 	$(eval _FWD   := $(call fwd_of,$*))
 	$(eval _OAUTH := $(filter oauth.%,$(_FQDN)))
 	@test -n "$(_EMAIL)" || \
-	    { echo "Error: format is  [<old server IP>__]<hostname>__<email>.done  e.g. test.ksy.jp__alice@gmail.com.done"; exit 1; }
+	    { echo "Error: format is  [<old server IP>__]<hostname>__<email>.done  e.g. test.example.org__alice@example.com.done"; exit 1; }
 	$(call check_fwd,$(_FWD))
 	@test -z "$(_FWD)" || test -z "$(_OAUTH)" || \
 	    { echo "Error: the GitHub-login broker cannot start in forward mode."; exit 1; }
@@ -468,16 +474,16 @@ endef
 	@touch $@
 
 # ── three-container sets ──────────────────────────────────────────────────────
-# Usage: make shop.ksy.jp__alice@gmail.com.create3
-#        make shop.ksy.jp.dev2stg
-#        make shop.ksy.jp.stg2prod
-#        make shop.ksy.jp.list3
+# Usage: make shop.example.org__alice@example.com.create3
+#        make shop.example.org.dev2stg
+#        make shop.example.org.stg2prod
+#        make shop.example.org.list3
 #
 # One application gets three containers (stem = production hostname):
-#   shop.ksy.jp          production   no MCP   ROLE=prod
-#   shop-stg.ksy.jp  staging      no MCP   ROLE=stg
-#   shop-dev.ksy.jp      development  MCP      ROLE=dev
-# (for a domain apex ksy.jp: stg.ksy.jp and dev.ksy.jp). Claude works only
+#   shop.example.org          production   no MCP   ROLE=prod
+#   shop-stg.example.org  staging      no MCP   ROLE=stg
+#   shop-dev.example.org      development  MCP      ROLE=dev
+# (for a domain apex example.org: stg.example.org and dev.example.org). Claude works only
 # in the dev container and commits to its /srv/app; a person on the host sends
 # that commit to staging (dev2stg), then staging's commit to production
 # (stg2prod), and each runs `make -C /srv/app install` there. Claude's trial and
@@ -493,7 +499,7 @@ endef
 	$(eval _EMAIL := $(call email_of,$*))
 	$(eval _FWD   := $(call fwd_of,$*))
 	@test -n "$(_EMAIL)" || \
-	    { echo "Error: format is  [<old server IP>__]<production hostname>__<email>.create3  e.g. shop.ksy.jp__alice@gmail.com.create3"; exit 1; }
+	    { echo "Error: format is  [<old server IP>__]<production hostname>__<email>.create3  e.g. shop.example.org__alice@example.com.create3"; exit 1; }
 	$(call check_fwd,$(_FWD))
 	@test -n "$(IP)" || \
 	    { echo "Error: IP not set.  Run make <IP>.setupdone first."; exit 1; }
@@ -623,10 +629,10 @@ endef
 	podman exec $(_D)-web git -C /srv/app log --oneline --decorate --all -10 2>/dev/null || true
 
 # ── certificate and forward mode (moving a site from an old server) ──────────
-# Usage: make 203.0.113.5__pa-i.org__alice@gmail.com.done      (or .create3)
+# Usage: make 203.0.113.5__example.net__alice@example.com.done      (or .create3)
 #        ... point the domain's DNS at this host ...
-#        make pa-i.org.getcert
-#        make pa-i.org.unforward
+#        make example.net.getcert
+#        make example.net.unforward
 #
 # A container created with a leading IP starts in forward mode: port 443 is
 # passed through, still encrypted, to that old server (which keeps serving with
@@ -683,7 +689,7 @@ list:
 #
 #   make image          rebuilds the image  → ONLY containers created afterwards.
 #   make mcpupdate       patches every already-running container IN PLACE.
-#   make <sub>.mcpupdate patches one running container (e.g. make test.ksy.jp.mcpupdate).
+#   make <sub>.mcpupdate patches one running container (e.g. make test.example.org.mcpupdate).
 #
 # In-place is used (not recreate) because each container holds persistent state
 # in its writable layer — the Bearer token hash (/etc/mcp-server), the deploy
@@ -729,13 +735,13 @@ checkall:
 	@VERBOSE=1 sh scripts/check-installed.sh
 
 # Verbose check of a single running container. Stem is the hostname:
-#   make test.ksy.jp.check   → test.ksy.jp-web
+#   make test.example.org.check   → test.example.org-web
 %.check:
 	@VERBOSE=1 sh scripts/check-installed.sh $*-web
 
 # Update one running container in place. Stem is the hostname:
-#   make test.ksy.jp.mcpupdate   → test.ksy.jp-web
-#   make oauth.ksy.jp.mcpupdate  → oauth.ksy.jp-web
+#   make test.example.org.mcpupdate   → test.example.org-web
+#   make oauth.example.org.mcpupdate  → oauth.example.org-web
 %.mcpupdate:
 	@set -e; \
 	c="$*-web"; \

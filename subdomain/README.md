@@ -99,11 +99,11 @@ After setup, the domain and IP are read from `/etc/vps-mcp/host.env` automatical
 ## Creating a VPS container
 
 ```sh
-make alice__alice@gmail.com.done
+make alice__alice@example.com.done
 ```
 
 This:
-1. Runs `podman run` with `SUBDOMAIN=alice.example.com`, `MAIL_DOMAIN=alice.example.com`, and `NOTIFY_EMAIL=alice@gmail.com`
+1. Runs `podman run` with `SUBDOMAIN=alice.example.com`, `MAIL_DOMAIN=alice.example.com`, and `NOTIFY_EMAIL=alice@example.com`
 2. Waits for the proxy to route the HTTP-01 ACME challenge path to the new container
 3. Runs `podman exec alice-web /usr/local/bin/vps-mcp-init.sh`, which:
    - Writes `/etc/vps-mcp-env` (including `OAUTH_BASE=https://oauth.example.com`)
@@ -114,7 +114,7 @@ This:
    - Switches nginx to the live certificate
    - Runs `systemctl enable --now mcp-server`
    - Sends a creation notification email to `NOTIFY_EMAIL` from `noreply@alice.example.com`
-4. Creates `alice__alice@gmail.com.done` to record completion
+4. Creates `alice__alice@example.com.done` to record completion
 
 Access is granted by **GitHub login**: a user only obtains a Bearer token if they
 log in with a GitHub account whose verified primary email matches `NOTIFY_EMAIL`.
@@ -122,7 +122,7 @@ log in with a GitHub account whose verified primary email matches `NOTIFY_EMAIL`
 To create a container for the **parent domain** itself (no subdomain prefix):
 
 ```sh
-make default__admin@gmail.com.done
+make default__admin@example.com.done
 ```
 
 This works identically, but `SUBDOMAIN=example.com` and `MAIL_DOMAIN=default.example.com`.
@@ -137,7 +137,7 @@ Delete a container (manual):
 
 ```sh
 podman stop alice-web && podman rm alice-web
-rm -f alice__alice@gmail.com.done
+rm -f alice__alice@example.com.done
 ```
 
 ## GitHub login broker (one-time setup)
@@ -156,7 +156,7 @@ single dedicated `oauth` container that brokers logins for every other container
    ```
 3. Create the broker container (it is the only one holding the GitHub secret):
    ```sh
-   make oauth__admin@gmail.com.done
+   make oauth__admin@example.com.done
    ```
 
 Every other container learns only `OAUTH_BASE=https://oauth.example.com`.

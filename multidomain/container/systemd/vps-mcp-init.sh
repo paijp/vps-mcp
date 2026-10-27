@@ -73,7 +73,7 @@ mkdir -p /etc/mcp-server
 chmod 700 /etc/mcp-server
 
 # ── 3. Postfix ────────────────────────────────────────────────────────────────
-# MAIL_DOMAIN is always distinct from the host relay's hostname (kimoken.jp),
+# MAIL_DOMAIN is always distinct from the host relay's hostname,
 # so Postfix will not mistake the relay for itself and bounce with "loops back
 # to myself". For default: MAIL_DOMAIN=default.DOMAIN; others: MAIL_DOMAIN=SUBDOMAIN.
 postconf -e "myhostname = ${MAIL_DOMAIN}"
