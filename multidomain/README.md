@@ -10,6 +10,9 @@ Compared with [`subdomain/`](../subdomain/README.md) (one base domain,
 containers named after the subdomain label), choose **one edition per server**:
 both bind ports 53/80/443/25 on the host.
 
+Why things are designed the way they are — the decisions, the alternatives
+considered and the problems behind them — is in [DESIGN.md](DESIGN.md).
+
 ## Architecture
 
 ```
@@ -377,36 +380,59 @@ make 203.0.113.5__example.net__alice@example.com.create3   # or a set: only prod
 
 The usual sequence:
 
-1. Register the domain here (`make <domain>.dnsdone`) with the same records,
-   then create the container(s) as above. The certificate request at creation
-   fails while the name still points at the old server; that is expected.
-2. Point the domain's DNS at this host (e.g. switch the Sakura zone to a
-   secondary of this host). Visitors keep reaching the old site through the
-   passthrough.
+1. Register the domain here (`make <domain>.dnsdone`) with the same records
+   as the current DNS. Names that keep pointing at the old server until the
+   move (e.g. `@ IN A <old IP>`) are allowed while their container forwards
+   there. Then create the container(s) as above. The certificate step at
+   creation stops at its reachability check while the names still point at
+   the old server (see step 3); that is expected.
+2. Point the names at this host: switch the zone to "secondary of this host"
+   at the registrar's DNS, and/or change their A records here and re-run
+   `make <domain>.dnsdone`. Visitors keep reaching the old site through the
+   passthrough. Wait until the public DNS answers with this host (Sakura's
+   secondaries can take tens of minutes to transfer the zone; check with
+   `dig +short @8.8.8.8 <name> A`).
 3. `make example.net.getcert` — one Let's Encrypt certificate for the hostname and,
    on a production or standalone container, every name in
    `/etc/vps-mcp/cert-names` (e.g. `www` and redirect-only names that reach the
    apex container). Re-run to add a name or after a failure. It first checks
    that every name reaches this container over http (a random file in the ACME
-   webroot, fetched through public DNS) and stops without asking Let's Encrypt
-   if one does not, so a name whose DNS has not moved yet costs nothing against
-   Let's Encrypt's limit of 5 failed validations per hostname per hour
-   (`NOCHECK=1` skips the check). Container creation runs the same step.
-4. `make example.net.unforward` (refused until step 3 succeeded). This container
+   webroot, fetched from every address public DNS gives for the name) and
+   stops without asking Let's Encrypt if one does not, so running it too early
+   costs nothing against Let's Encrypt's limit of 5 failed validations per
+   hostname per hour (`NOCHECK=1` skips the check). Container creation runs the
+   same step.
+4. Before leaving forward mode, keep anything that must stay on plain http
+   (devices that cannot speak https, see the nginx layout section): a
+   `listen 80; server_name <device name>;` server block in `conf.d/` that
+   proxies to `http://<old IP>`. After `unforward`, port 80 otherwise redirects
+   to HTTPS.
+5. `make example.net.unforward` (refused until step 3 succeeded). This container
    now serves 443: the MCP server and everything ported answer here, the rest
    still goes to the old server through `app.d/forward.conf`.
-5. Port the remaining parts; narrow `forward.conf`, and delete it when nothing
-   is left on the old server. In a create3 set these files live in the dev
-   repository (`files/`), seeded at creation, and reach production with
-   `dev2stg` / `stg2prod` like any other change.
+6. **One container (`.done`): register the MCP connector now**
+   (`https://example.net/mcp/sse`). Until `unforward` its `/mcp/` is
+   unreachable, because 443 still belongs to the old site; a Claude session
+   only sees connectors that existed when it started, so start a new one.
+   In a create3 set the MCP server is on the dev container, which never
+   forwards, so its connector works from the beginning.
+7. Port the remaining parts; narrow `forward.conf` (and the plain-http
+   block of step 4), and delete them when nothing is left on the old server.
+   For data that keeps changing (logs appended by devices), copy it with
+   `rsync` before switching a path over and once more right after, so
+   nothing written on the old server in between is lost. In a create3 set
+   these files live in the dev repository (`files/`), seeded at creation, and
+   reach production with `dev2stg` / `stg2prod` like any other change.
+
+Once the names point here, `ssh <old name>` reaches this host instead (host
+key warning); connect to the old server by its IP, e.g.
+`ssh -o HostKeyAlias=<old name> -o HostName=<old IP> <old name>`.
 
 `make example.net.forward` (optionally `OLD=<IP>`) returns to forward mode and
 `make example.net.mode` shows the mode and certificate. Everything runs inside the
 container (`/usr/local/bin/vps-mcp-mode.sh`); the host only runs `podman exec`
 — nothing on the host proxies traffic. The old server sees every request
-coming from this host's address (no PROXY header is passed on). In forward
-mode the container's own MCP server is unreachable (443 belongs to the old
-site); in a create3 set the MCP server is on the dev container and stays usable.
+coming from this host's address (no PROXY header is passed on).
 
 ## MCP connector setup
 
