@@ -32,8 +32,12 @@ func TestContainerName(t *testing.T) {
 		{"alice.example.com.", "alice.example.com-web", "example.com", false},
 		{"alice.example.com:80", "alice.example.com-web", "example.com", false},
 		// errors
-		{"alice.bob.example.com", "", "", true}, // multi-level
-		{"other.domain.com", "", "", true},      // unregistered
+		// deeper names go to the container of the label below the domain
+		{"alice.bob.example.com", "bob.example.com-web", "example.com", false},
+		{"x.y.alice.example.com", "alice.example.com-web", "example.com", false},
+		{"http.iot0.sub.example.net", "iot0.sub.example.net-web", "sub.example.net", false},
+		{"a_b.bob.example.com", "", "", true}, // invalid label in a deeper name
+		{"other.domain.com", "", "", true},    // unregistered
 		{"b.example.net", "b.example.net-web", "example.net", false},
 		{"example.edu", "", "", true},        // unregistered
 		{"alice_.example.com", "", "", true}, // invalid char

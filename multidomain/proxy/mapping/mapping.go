@@ -7,9 +7,12 @@
 //	"test.example.com" → "test.example.com-web"
 //	"example.com"      → "example.com-web"
 //
-// A hostname is accepted only when it is a registered domain itself or a
-// single-label subdomain of one. Registered domains are read from a file
-// (one domain per line) that `make <domain>.dnsdone` maintains.
+// A hostname is accepted when it is a registered domain itself or a
+// subdomain of one. A deeper name maps to the container of its label right
+// below the domain ("http.iot0.example.com" → "iot0.example.com-web"), so a
+// container can answer extra names under its own (e.g. a plain-http name for
+// devices that its certificate does not cover). Registered domains are read
+// from a file (one domain per line) that `make <domain>.dnsdone` maintains.
 package mapping
 
 import (
@@ -28,9 +31,10 @@ var labelRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 // ContainerName maps a hostname to a Podman container name and returns the
 // registered domain it belongs to.
 //
-//	"alice.example.com" → "alice.example.com-web", "example.com"
-//	"example.com"       → "example.com-web",       "example.com"
-//	anything else       → error
+//	"alice.example.com"   → "alice.example.com-web", "example.com"
+//	"x.alice.example.com" → "alice.example.com-web", "example.com"
+//	"example.com"         → "example.com-web",       "example.com"
+//	anything else         → error
 func ContainerName(host string, domains []string) (name, domain string, err error) {
 	host = normalize(host)
 
@@ -44,16 +48,16 @@ func ContainerName(host string, domains []string) (name, domain string, err erro
 	if domain == "" {
 		return "", "", errors.New("host not in any registered domain")
 	}
-	if host != domain {
-		sub := strings.TrimSuffix(host, "."+domain)
-		if strings.Contains(sub, ".") {
-			return "", "", errors.New("multi-level subdomain not allowed")
-		}
-		if !labelRe.MatchString(sub) {
+	if host == domain {
+		return host + "-web", domain, nil
+	}
+	labels := strings.Split(strings.TrimSuffix(host, "."+domain), ".")
+	for _, l := range labels {
+		if !labelRe.MatchString(l) {
 			return "", "", errors.New("invalid subdomain label")
 		}
 	}
-	return host + "-web", domain, nil
+	return labels[len(labels)-1] + "." + domain + "-web", domain, nil
 }
 
 func normalize(host string) string {

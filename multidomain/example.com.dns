@@ -9,7 +9,10 @@
 ; those. It also adds defaults for @ A, * A, the @ / * SPF TXT and the
 ; _dmarc TXT; writing one of these here replaces that default (e.g. point
 ; the apex at another server, or keep an existing SPF). No A/AAAA/CNAME on
-; names served by a container.
+; names served by a container, except an A record with this host's own IP
+; (write one where the wildcard does not answer, i.e. for a container name
+; that has records below it: "iot0 IN A <host IP>" when "http.iot0" exists) or,
+; while that container is in forward mode, with the old server's IP.
 ; Every record line must start with its owner name (no leading whitespace).
 
 ; @       IN MX    10 mail.example.net.

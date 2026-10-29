@@ -26,7 +26,7 @@ Internet
 ```
 
 - **BIND9** is the primary authoritative server for every registered domain (`make <domain>.dnsdone`).
-- **vps-proxy** reads the TLS ClientHello SNI and maps `test.example.org` → container `test.example.org-web` when `example.org` is listed in `/etc/vps-mcp/domains` (the domain itself or one label below it). Unknown names under a domain fall back to the domain's apex container (`example.org-web`), if any. It TCP-proxies without decryption and injects PROXY protocol v1 so nginx sees the real client IP.
+- **vps-proxy** reads the TLS ClientHello SNI and maps `test.example.org` → container `test.example.org-web` when `example.org` is listed in `/etc/vps-mcp/domains`. A deeper name goes to the container of its label right below the domain (`http.iot0.example.org` → `iot0.example.org-web`), so a container can answer extra names of its own, such as a plain-http name for devices. Unknown names under a domain fall back to the domain's apex container (`example.org-web`), if any. It TCP-proxies without decryption and injects PROXY protocol v1 so nginx sees the real client IP.
 - **vps-proxy-http** does the same with the HTTP `Host` header.
 - Both proxies re-read `/etc/vps-mcp/domains` when it changes — no restart after adding a domain.
 - **list-containers** (setuid-root) queries the Podman socket to build the container→IP routing table used by both proxies.
@@ -327,6 +327,14 @@ Every HTTPS server block includes `/etc/nginx/listen443.conf` and
 lines, and the port-80 server includes `/etc/nginx/http80.d/*.conf`; an extra
 server block for another hostname (in `conf.d/`) must do the same. Forward mode
 and `getcert` switch every server block by rewriting these files.
+
+Port 80 redirects everything but ACME challenges to HTTPS. Devices that can
+only speak plain http get a name of their own (one the certificate does not
+cover, e.g. `http.iot0.example.org` for the container `iot0.example.org`) and a
+plain `listen 80; server_name http.iot0.example.org;` server block in
+`conf.d/`, which takes those requests before the default one. Its records go
+in the zone as `http.iot0 IN A <host IP>` plus `iot0 IN A <host IP>` (the
+wildcard does not answer for a name that has records below it).
 
 ### Migrating an existing container's nginx configuration
 

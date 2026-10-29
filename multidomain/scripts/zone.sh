@@ -78,24 +78,34 @@ apply)
                 for (i = 2; i <= n; i++) {
                     u = toupper(f[i])
                     if (u ~ /^[0-9]+$/ || u == "IN") continue
-                    type = u; break
+                    type = u; value = f[i + 1]; break
                 }
                 if (type == "SOA" || type == "NS") bad(type " records are host-managed")
                 if (owner ~ /(^|\.)mail\._domainkey(\.|$)/) bad("mail._domainkey is host-managed (DKIM)")
-                if (type == "A" || type == "AAAA" || type == "CNAME") print owner > "/dev/stderr"
+                if (type == "A" || type == "AAAA" || type == "CNAME") print owner, type, value > "/dev/stderr"
             }
             depth += gsub(/\(/, "(", line) - gsub(/\)/, ")", line)
         }
         END { exit err }
     ' "$SRC" 2> "$owners" || exit 1
+    # Two A records are allowed on a container name: this host's own IP (the
+    # name is served here anyway; needed where the wildcard does not answer,
+    # i.e. a name with records below it, e.g. iot0 when http.iot0 exists), and,
+    # while the container is in forward mode, the old server it forwards to
+    # (the name keeps pointing there until the move).
     for c in $(containers_of); do
-        while read -r o; do
+        fwd=
+        if podman exec "$c-web" test -f /etc/nginx/stream.d/forward.conf 2>/dev/null; then
+            fwd=$(podman exec "$c-web" cat /etc/vps-mcp/forward-ip 2>/dev/null || true)
+        fi
+        while read -r o t v; do
             case "$o" in
                 @) fq=$D ;;
                 *.) fq=${o%.} ;;
                 *) fq=$o.$D ;;
             esac
-            [ "$fq" != "$c" ] || die "$SRC: '$o' is served by container $c-web; remove that A/AAAA/CNAME record"
+            [ "$fq" != "$c" ] || { [ "$t" = A ] && { [ "$v" = "$IP" ] || { [ -n "$fwd" ] && [ "$v" = "$fwd" ]; }; }; } ||
+                die "$SRC: '$o' is served by container $c-web; remove that $t record (an A record may only point at this host, $IP${fwd:+, or at $fwd while $c-web forwards there})"
         done < "$owners"
     done
 
