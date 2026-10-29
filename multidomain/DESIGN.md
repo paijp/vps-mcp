@@ -106,3 +106,24 @@ undo a decision without knowing what it was for.
 - **`make install-binaries` restarts the proxies.** A running proxy keeps the
   old binary; the socket units hold the listening sockets, so new
   connections wait instead of failing.
+
+## TODO: a container on another host than its domain's DNS
+
+Moving a container to another host (or putting one there) already works with
+forward mode: create it on host B with host A's IP in front of its name, set
+`sub IN A <B's IP>` in A's zone, then `getcert` / `unforward` on B. Two pieces
+are missing:
+
+- **Registering a domain on B without serving its DNS.** B's proxies route
+  only domains in B's `/etc/vps-mcp/domains`, and the only way to add one is
+  `make <domain>.dnsdone`, which also makes B a master of the zone (harmless,
+  as the secondaries pull from A only, but two copies of a zone invite
+  confusion). Plan: `make <domain>.domainonly` — domains file and DKIM key,
+  no BIND zone.
+- **DKIM and SPF for mail from B.** Every host creates the domain's DKIM key
+  under the same selector `mail`, and only A's public key is in the zone, so
+  B's signatures fail. An explicit `sub IN A` record also stops the
+  wildcard's SPF from applying to `sub`. Plan: a per-host selector for new
+  registrations (e.g. `mail-<host>`; existing hosts keep `mail`), with
+  `domainonly` printing the lines to add to A's `.dns` file:
+  `mail-<host>._domainkey IN TXT ...` and `sub IN TXT "v=spf1 ip4:<B> -all"`.
