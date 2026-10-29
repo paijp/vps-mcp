@@ -4,11 +4,17 @@
 # Run by vps-mcp-init.sh and by the host (make <fqdn>.getcert / .forward /
 # .unforward) through `podman exec`.
 #
-#   getcert           obtain / update the Let's Encrypt certificate (HTTP-01)
+#   getcert [--no-check]
+#                     obtain / update the Let's Encrypt certificate (HTTP-01)
 #                     for this hostname plus, on a production or standalone
 #                     container, every name in /etc/vps-mcp/cert-names, as one
 #                     certificate named after this hostname; switch
-#                     /etc/nginx/ssl-cert.conf to it.
+#                     /etc/nginx/ssl-cert.conf to it. First checks that every
+#                     name reaches this container over http (a random file in
+#                     the ACME webroot, fetched from every address public DNS
+#                     gives for the name, through the proxy) and stops without asking Let's Encrypt otherwise:
+#                     each failed validation counts against its limit of 5
+#                     failures per hostname per hour. --no-check skips that.
 #   forward [IP]      forward mode: port 443 is passed through, still
 #                     encrypted, to IP:443 (the old server keeps serving with
 #                     its own certificate); port 80 answers ACME challenges
@@ -70,6 +76,19 @@ EOF
     if [[ $1 == https ]]; then
         printf '    proxy_ssl_server_name on;\n    proxy_ssl_name        $host;\n'
     fi
+}
+
+# public_a NAME — the name's IPv4 addresses as public DNS answers them (one
+# per line). The container's own resolver (podman's) answers a container
+# hostname with the container's internal address, so a reachability check
+# through it would always succeed; ask public resolvers directly instead.
+public_a() {
+    local r
+    for r in 1.1.1.1 8.8.8.8; do
+        dig +short +time=5 +tries=1 @"$r" A "$1" 2>/dev/null |
+            grep -E '^[0-9]+(\.[0-9]+){3}$' && return 0
+    done
+    return 1
 }
 
 cert_ok() {  # a Let's Encrypt certificate is configured and not expired
@@ -135,6 +154,29 @@ getcert)
     fi
     if [[ -n $NOTIFY_EMAIL ]]; then email=(--email "$NOTIFY_EMAIL" --no-eff-email)
     else email=(--register-unsafely-without-email); fi
+    if [[ ${2:-} != --no-check ]]; then
+        tok=vps-mcp-reach-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+        dir=/var/www/html/.well-known/acme-challenge
+        mkdir -p "$dir"; echo "$tok" > "$dir/$tok"
+        bad=()
+        for n in "${names[@]}"; do
+            ips=$(public_a "$n" || true)
+            [[ -n $ips ]] || { bad+=("$n"); continue; }
+            for ip in $ips; do
+                got=$(curl -s --max-time 10 --resolve "$n:80:$ip" \
+                    "http://$n/.well-known/acme-challenge/$tok" 2>/dev/null || true)
+                [[ $got == "$tok" ]] || { bad+=("$n($ip)"); break; }
+            done
+        done
+        rm -f "$dir/$tok"
+        if (( ${#bad[@]} )); then
+            echo "vps-mcp-mode: not reaching this container over http yet: ${bad[*]}" >&2
+            echo "vps-mcp-mode: (DNS not pointing here yet?) Let's Encrypt was not asked;" >&2
+            echo "vps-mcp-mode: retry once DNS has moved (getcert --no-check skips this check)" >&2
+            exit 1
+        fi
+        echo "vps-mcp-mode: all names reach this container"
+    fi
     args=()
     for n in "${names[@]}"; do args+=(-d "$n"); done
     echo "vps-mcp-mode: requesting a certificate for: ${names[*]}"
@@ -200,6 +242,6 @@ status)
     fi
     ;;
 *)
-    die "usage: vps-mcp-mode.sh getcert | forward [IP] | unforward | seed IP [ROOT] | status"
+    die "usage: vps-mcp-mode.sh getcert [--no-check] | forward [IP] | unforward | seed IP [ROOT] | status"
     ;;
 esac

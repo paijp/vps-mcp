@@ -24,4 +24,5 @@ jq       jq
 git      git-core
 make     make
 rsync    rsync
+dig      bind-utils
 '

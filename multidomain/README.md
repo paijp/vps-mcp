@@ -378,7 +378,12 @@ The usual sequence:
 3. `make example.net.getcert` — one Let's Encrypt certificate for the hostname and,
    on a production or standalone container, every name in
    `/etc/vps-mcp/cert-names` (e.g. `www` and redirect-only names that reach the
-   apex container). Re-run to add a name or after a failure.
+   apex container). Re-run to add a name or after a failure. It first checks
+   that every name reaches this container over http (a random file in the ACME
+   webroot, fetched through public DNS) and stops without asking Let's Encrypt
+   if one does not, so a name whose DNS has not moved yet costs nothing against
+   Let's Encrypt's limit of 5 failed validations per hostname per hour
+   (`NOCHECK=1` skips the check). Container creation runs the same step.
 4. `make example.net.unforward` (refused until step 3 succeeded). This container
    now serves 443: the MCP server and everything ported answer here, the rest
    still goes to the old server through `app.d/forward.conf`.

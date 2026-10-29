@@ -654,7 +654,7 @@ endef
 #   <host>.mode        show mode, forward target and certificate
 %.getcert:
 	@podman container exists $*-web || { echo "Error: container $*-web not found."; exit 1; }
-	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh getcert
+	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh getcert $(if $(NOCHECK),--no-check)
 	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
 
 %.unforward:

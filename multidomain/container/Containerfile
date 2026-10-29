@@ -33,6 +33,7 @@ RUN dnf install -y epel-release \
         git-core \
         make \
         rsync \
+        bind-utils \
         nginx-mod-stream \
     && dnf clean all
 
