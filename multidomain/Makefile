@@ -85,9 +85,11 @@ help:
 	@printf "Update the MCP app (index.mjs / package.json):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
 	@printf "  make mcpupdate            Update ALL running MCP containers in place (stop + cp + npm install + start,\n"
-	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
+	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq, dig),\n"
+	@printf "                            and the helper scripts (vps-mcp-mode.sh, ...) in EVERY container\n"
 	@printf "  make test.example.org.mcpupdate  Update a single running container (stem -> <stem>-web;\n"
-	@printf "                            for a create3 set its dev container; staging is skipped)\n"
+	@printf "                            for a create3 set its dev container, plus the scripts of all three)\n"
+	@printf "  make test.example.org.scriptupdate  Only the helper scripts and tools of one container\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
 	@printf "Check installed files against this checkout:\n"
 	@printf "  make check\n"
@@ -250,6 +252,9 @@ install-binaries:
 	chmod 0755      /usr/local/sbin/list-containers
 	cd proxy && go build -o /usr/local/sbin/vps-proxy       ./cmd/vps-proxy
 	cd proxy && go build -o /usr/local/sbin/vps-proxy-http  ./cmd/vps-proxy-http
+	# A running proxy keeps the old binary until restarted; the socket units
+	# hold the listening sockets, so new connections wait instead of failing.
+	systemctl try-restart vps-proxy443.service vps-proxy80.service
 
 # ── install-services ──────────────────────────────────────────────────────────
 
@@ -712,8 +717,10 @@ mcpupdate:
 	    case $$h in *-stg.*|stg.*) continue ;; esac; \
 	    d=$$(sh scripts/names3.sh $$h | cut -d' ' -f3); \
 	    podman container exists $$d-web && continue; \
-	    $(MAKE) --no-print-directory $$h.mcpupdate; \
-	done
+	    $(MAKE) --no-print-directory $$h.mcpupdate MCPUPDATE_ALL=1; \
+	done; \
+	: 'Every container, staging and production included, runs the scripts.'; \
+	for c in $$cs; do $(MAKE) --no-print-directory $${c%-web}.scriptupdate; done
 
 # ── check installed files vs this checkout ───────────────────────────────────
 # Reports OK / DIFFER / MISSING for every host-side file the Makefile installs,
@@ -722,7 +729,8 @@ mcpupdate:
 # meaningful. Especially useful for configs no update target refreshes — proxy
 # units, nftables, opendkim, BIND — so a `git pull` doesn't silently leave the
 # live host on an old copy. Then, for every running <name>-web container, diffs
-# the baked nginx/systemd/init files (which `mcpupdate` never refreshes) and
+# the baked nginx/systemd/init files (`mcpupdate` refreshes only the helper
+# scripts in /usr/local/bin, not the nginx configuration) and
 # runs `nginx -t` inside the container to catch a config it cannot load.
 #
 #   check              summary (status line per file; nginx diffs still shown)
@@ -738,6 +746,30 @@ checkall:
 #   make test.example.org.check   → test.example.org-web
 %.check:
 	@VERBOSE=1 sh scripts/check-installed.sh $*-web
+
+# Refresh the image's helper scripts, their pristine nginx snippets and the
+# app skeleton inside one running container (stem -> <stem>-web), plus the
+# tools they need (dig, ...). Unlike the MCP app these run on every container,
+# staging and production included: vps-mcp-mode.sh (getcert / forward /
+# unforward), vps-mcp-recv.sh (dev2stg / stg2prod), certbot-deploy.sh, and
+# vps-mcp-init.sh (used only at creation, refreshed for consistency).
+# make mcpupdate runs it for every container; <stem>.mcpupdate for the
+# containers of that stem's set.
+%.scriptupdate:
+	@set -e; c="$*-web"; \
+	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
+	for f in vps-mcp-init.sh certbot-deploy.sh vps-mcp-recv.sh vps-mcp-mode.sh; do \
+	    podman cp container/systemd/$$f $$c:/usr/local/bin/$$f; \
+	    podman exec $$c chmod 755 /usr/local/bin/$$f; \
+	done; \
+	podman exec $$c mkdir -p /usr/local/share/vps-mcp/nginx; \
+	for f in listen443.conf listen443-main.conf http80-default.conf; do \
+	    podman cp container/nginx/$$f $$c:/usr/local/share/vps-mcp/nginx/$$f; \
+	done; \
+	podman exec $$c rm -rf /usr/local/share/vps-mcp/app-skeleton; \
+	podman cp container/app-skeleton $$c:/usr/local/share/vps-mcp/app-skeleton; \
+	sh scripts/ensure-tools.sh $$c; \
+	echo "    $$c: scripts updated"
 
 # Update one running container in place. Stem is the hostname:
 #   make test.example.org.mcpupdate   → test.example.org-web
@@ -766,4 +798,10 @@ checkall:
 	    echo "    $$c: WARNING: npm update failed; dependencies not refreshed"; \
 	podman exec $$c systemctl start mcp-server; \
 	sh scripts/ensure-tools.sh $$c; \
-	echo "    $$c updated"
+	echo "    $$c updated"; \
+	: 'Called directly (not from mcpupdate): the scripts of the whole set too.'; \
+	if [ -z "$(MCPUPDATE_ALL)" ]; then \
+	    for x in $$(sh scripts/names3.sh $*); do \
+	        if podman container exists $$x-web; then $(MAKE) --no-print-directory $$x.scriptupdate; fi; \
+	    done; \
+	fi
