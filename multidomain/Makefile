@@ -254,7 +254,10 @@ install-binaries:
 	cd proxy && go build -o /usr/local/sbin/vps-proxy-http  ./cmd/vps-proxy-http
 	# A running proxy keeps the old binary until restarted; the socket units
 	# hold the listening sockets, so new connections wait instead of failing.
-	systemctl try-restart vps-proxy443.service vps-proxy80.service
+	# On a new host (setupdone) the units are installed only later.
+	for u in vps-proxy443.service vps-proxy80.service; do \
+	    if systemctl cat $$u >/dev/null 2>&1; then systemctl try-restart $$u; fi; \
+	done
 
 # ── install-services ──────────────────────────────────────────────────────────
 
