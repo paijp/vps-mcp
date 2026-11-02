@@ -61,6 +61,7 @@ host/
 scripts/
   zone.sh                register / update / remove a zone
   names3.sh              production → staging / dev hostnames of a create3 set
+  mask.sh                masks IDs, addresses and secrets in production output (prodstatus, stg2prod)
 example.com.dns          sample records file — copy to <domain>.dns
 Makefile
 ```
@@ -273,6 +274,34 @@ Register only the dev container as a connector (`https://shop-dev.example.org/mc
    an `install` that stopped on a missing hand-placed file), nothing is sent
    and `make install` runs again.
 4. `make shop.example.org.list3` shows the three containers and their HEADs.
+5. `make shop.example.org.prodstatus` shows production's state for Claude
+   (see below); `STG=1` shows staging.
+
+### Keeping production data out of the conversation
+
+The point of the set is that production data (customer records, device IDs,
+log contents, secrets) never reaches Claude. Whatever a person pastes into
+the conversation becomes part of it, so:
+
+- Paste `make <fqdn>.prodstatus` rather than ad-hoc output from production.
+  It runs the app's `make status`, which prints counts, sizes and timestamps
+  only (service state, errors in the last 24 h, requests by HTTP status, and
+  file count / size / newest change of each directory in `STATUS_DIRS`), and
+  passes the result through `scripts/mask.sh` (secrets, e-mail addresses,
+  IPv4 addresses, long hex strings and long numbers are masked). The output of
+  `make install` on production in `stg2prod` is masked the same way. `RAW=1`
+  shows either unmasked, for the person's own use.
+- The mask is a safety net, not a guarantee. Before pasting anything else from
+  production (a file listing, `journalctl`, a log), read it; prefer commands
+  that print counts (`wc -l`, `stat -c '%s %y'`, `sha1sum`).
+- To test with realistic data, put it on **staging** under a test identifier;
+  the dev container reads it at `/mnt/stg`. Test production only with test
+  identifiers.
+- Before placing files from an old server in the dev container, remove the
+  secrets they contain (API keys, passwords), and rotate any that were shown.
+
+The dev container's tool descriptions and `/srv/app/CLAUDE.md` tell Claude the
+same rules.
 
 After each transfer the dev repository records `stg/main` and
 `prod/main` (remote-tracking refs), so Claude can see what each server
@@ -423,6 +452,10 @@ The usual sequence:
    nothing written on the old server in between is lost. In a create3 set
    these files live in the dev repository (`files/`), seeded at creation, and
    reach production with `dev2stg` / `stg2prod` like any other change.
+   In a create3 set, try the ported parts with realistic data on staging
+   (placed by a person under a test identifier), and on production only with
+   test identifiers; check production with `make <fqdn>.prodstatus` (see
+   "Keeping production data out of the conversation").
 
 Once the names point here, `ssh <old name>` reaches this host instead (host
 key warning); connect to the old server by its IP, e.g.

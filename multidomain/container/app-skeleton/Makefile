@@ -23,6 +23,10 @@ MIRROR_DIRS := etc/nginx/app.d opt/app.d
 APPS := $(notdir $(patsubst %/,%,$(wildcard files/opt/app.d/*/)))
 ENV_APPS := $(foreach a,$(APPS),$(if $(wildcard files/opt/app.d/$(a)/env.py.sample),$(a)))
 
+# Data directories whose state `make status` summarizes (file count, total
+# size, newest change; never names or contents), e.g. /var/www/db/myapp.
+STATUS_DIRS :=
+
 # Other per-environment files placed by hand on each server and never
 # committed (passwords, API keys, ...). install stops if one is missing.
 REQUIRED_LOCAL :=
@@ -31,7 +35,7 @@ ROLE := $(shell sed -n 's/^ROLE=//p' /etc/vps-mcp-env 2>/dev/null)
 
 RSYNC := rsync -rlt --omit-dir-times --checksum --exclude=.gitkeep
 
-.PHONY: install install-inner check files reload getlog diff
+.PHONY: install install-inner check files reload getlog diff status
 
 # Run install-inner; on failure print diagnostics and still exit non-zero.
 install:
@@ -99,3 +103,31 @@ diff:
 	    $(RSYNC) -n -i --delete "files/$$d/" "/$$d/"; \
 	done
 	@$(RSYNC) -n -i $(addprefix --exclude=/,$(MIRROR_DIRS)) files/ /
+
+# State of this server as counts, sizes and timestamps only. The host runs it
+# on production (make <fqdn>.prodstatus) and masks the output, so a person can
+# paste it to Claude. Never print data here: no file names, log lines,
+# records or identifiers.
+UNITS := $(notdir $(wildcard files/etc/systemd/system/*.service))
+status:
+	@echo "role:      $(ROLE)   HEAD: $$(git log -1 --format='%h %s' 2>/dev/null)"
+	@printf 'nginx -t:  '; nginx -t >/dev/null 2>&1 && echo ok || echo FAILED
+	@echo "failed:    $$(systemctl --failed --no-legend --plain 2>/dev/null | wc -l) unit(s)"
+	@for u in $(UNITS); do \
+	    printf 'unit:      %-28s %-9s since %s, errors in 24h: %s\n' "$$u" \
+	        "$$(systemctl is-active $$u 2>/dev/null)" \
+	        "$$(systemctl show $$u -p ActiveEnterTimestamp --value 2>/dev/null)" \
+	        "$$(journalctl -u $$u -p err --since -24h -q --no-pager 2>/dev/null | wc -l)"; \
+	done
+	@f=/var/log/nginx/access.log; test -r $$f && \
+	    echo "nginx:     last 1000 requests by status: $$(tail -n 1000 $$f | awk '{print $$9}' | sort | uniq -c | awk '{printf "%s=%s ", $$2, $$1}')" || true
+	@for d in $(STATUS_DIRS); do \
+	    if test -d "$$d"; then \
+	        n=$$(find "$$d" -type f | wc -l); sz=$$(du -sh "$$d" 2>/dev/null | cut -f1); \
+	        t=$$(find "$$d" -type f -printf '%T@\n' | sort -n | tail -1); \
+	        printf 'dir:       %-28s %s file(s), %s, newest change %s\n' "$$d" "$$n" "$$sz" \
+	            "$$(test -n "$$t" && date -d @$${t%.*} '+%F %T %Z' || echo -)"; \
+	    else \
+	        printf 'dir:       %-28s missing\n' "$$d"; \
+	    fi; \
+	done

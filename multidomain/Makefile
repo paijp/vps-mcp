@@ -29,6 +29,12 @@ endef
 # the create3 set whose production hostname is FQDN (see scripts/names3.sh).
 names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1,$(_N)))$(eval _S := $(word 2,$(_N)))$(eval _D := $(word 3,$(_N)))
 
+# Run a command and pass its output (stdout and stderr) through
+# scripts/mask.sh, keeping the command's exit status. Used for output from a
+# production container, which a person may paste into a conversation with
+# Claude. RAW=1 skips the mask.
+masked = $(if $(RAW),$(1),{ rc=$$( { { $(1) 2>&1; echo $$? >&3; } | sh scripts/mask.sh >&4; } 3>&1 ); } 4>&1; exit $$rc)
+
 .DEFAULT_GOAL := help
 .PHONY: help image install-binaries install-services list domains mcpupdate check checkall
 
@@ -72,6 +78,8 @@ help:
 	@printf "  make shop.example.org.stg2prod  Show commits/stat (DIFF=1: full diff), ask,\n"
 	@printf "                                  send staging's HEAD to production\n"
 	@printf "  make shop.example.org.list3     Status and git HEAD of the three containers\n"
+	@printf "  make shop.example.org.prodstatus  Production state (make status, masked) to paste to Claude\n"
+	@printf "                                  (STG=1: staging; RAW=1 on stg2prod/prodstatus: unmasked)\n"
 	@printf "      For a domain apex (example.org) the others are stg.example.org and dev.example.org.\n\n"
 	@printf "Moving a site from an old server without downtime (forward mode):\n"
 	@printf "  make 203.0.113.5__example.net__alice@example.com.done\n"
@@ -486,6 +494,7 @@ endef
 #        make shop.example.org.dev2stg
 #        make shop.example.org.stg2prod
 #        make shop.example.org.list3
+#        make shop.example.org.prodstatus   (STG=1: staging)
 #
 # One application gets three containers (stem = production hostname):
 #   shop.example.org          production   no MCP   ROLE=prod
@@ -615,8 +624,19 @@ endef
 	    podman exec $(_D)-web git -C /srv/app update-ref refs/remotes/prod/main $$h; \
 	    echo "    prod/main = $$(podman exec $(_D)-web git -C /srv/app log -1 --format='%h %s' $$h)"; \
 	fi; \
-	echo "==> make install on $(_P)-web"; \
-	podman exec $(_P)-web make -C /srv/app install
+	echo "==> make install on $(_P)-web (output masked by scripts/mask.sh; RAW=1 shows it as is)"; \
+	$(call masked,podman exec $(_P)-web make -C /srv/app install)
+
+# Production's state for pasting to Claude: runs `make -s -C /srv/app status`
+# in the production container (the app's Makefile prints counts, sizes and
+# timestamps only) and masks IDs, addresses and secrets (scripts/mask.sh).
+# STG=1 shows staging instead.
+%.prodstatus:
+	$(call names3,$*)
+	@c=$(if $(STG),$(_S),$(_P)); \
+	podman container exists $$c-web || { echo "Error: container $$c-web not found."; exit 1; }; \
+	echo "== $$c-web: make status (masked)"; \
+	$(call masked,podman exec $$c-web make -s -C /srv/app status)
 
 # Status and git HEAD of the three containers, then dev's recent history with
 # the stg/main and prod/main markers.
