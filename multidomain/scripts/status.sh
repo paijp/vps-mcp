@@ -14,6 +14,9 @@
 #   HTTPS-REDIRECT         port 80 redirects to HTTPS
 #   -> IP:port             forwarded to the old server (forward mode, or
 #                          app.d/forward.conf after unforward)
+#   (... IP)               the old server it forwarded to once (kept in the
+#                          container's /etc/vps-mcp/forward-ip; delete that
+#                          file to drop the note)
 #
 # Names shown: every container, every A record in this host's zones, and
 # every name in a container's cert-names. Staging and development containers
@@ -148,6 +151,9 @@ for n in $order; do
             fi
             if [[ -n ${APPFWD[$c]} ]]; then lab "${APPFWD[$c]}"; line+=" -> $L${APPFWD[$c]}:443"; fi
         fi
+        # The old server it forwarded to once (forward-ip outlives unforward),
+        # when no line above still goes there.
+        [[ -n $fwd && $shown != *" $fwd "* ]] && line+="  (... $fwd)"
         echo "$line"
     fi
     # Whatever the zone or public DNS points at that is not on a line yet.
