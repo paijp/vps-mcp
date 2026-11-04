@@ -79,6 +79,17 @@ undo a decision without knowing what it was for.
   answers a container hostname with the container's own address, so a plain
   `curl http://<name>/` always succeeded and the check passed while the name
   still pointed at the old server.
+- **The forwarding configuration is the same on dev, staging and
+  production.** In a create3 set, `app.d/forward.conf` (everything not
+  ported yet goes to the old server) lives in the dev repository and reaches
+  staging and production with `dev2stg` / `stg2prod`, unchanged. So on dev
+  and staging too, a path that is not ported yet is answered by the old
+  server, i.e. the live site. Accepted on purpose: the three containers stay
+  identical (what staging tested is what production runs), and the site can
+  be looked at as a whole on every container while it is being ported. Keep
+  in mind that trying an unported page on dev or staging (a form, a login)
+  reaches the old production site. (Replacing the proxy on dev / staging by
+  a "not ported yet" answer was considered and not done.)
 - **Zone records on container names.** `zone.sh` rejects A/AAAA/CNAME on a
   name a container serves, except an A record with this host's IP (needed
   where the wildcard does not answer: a name with records below it, e.g.
