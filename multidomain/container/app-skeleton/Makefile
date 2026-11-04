@@ -74,7 +74,8 @@ check:
 	        fi; \
 	    fi; \
 	    p=$$(stat -c '%a %U:%G' "$$f"); \
-	    [ "$$p" = "640 root:$(ENV_GROUP)" ] || echo "warning: $$f is $$p (expected 640 root:$(ENV_GROUP))"; \
+	    [ "$$p" = "640 root:$(ENV_GROUP)" ] || { chown root:$(ENV_GROUP) "$$f" && chmod 640 "$$f" && \
+	        echo "fixed $$f: was $$p, now 640 root:$(ENV_GROUP) (the application reads it as $(ENV_GROUP))"; }; \
 	    for v in $$(sed -n 's/^\([A-Z_][A-Z0-9_]*\) *=.*/\1/p' "$$s"); do \
 	        grep -q "^$$v *=" "$$f" || echo "warning: $$f has no $$v (see env.py.sample)"; \
 	    done; \

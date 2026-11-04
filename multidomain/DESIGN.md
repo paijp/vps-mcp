@@ -34,8 +34,8 @@ undo a decision without knowing what it was for.
   person is editing) and stops with a one-line "edit, then rename" command, so
   a person only types the secrets. A sample marked `# env: auto` (no secrets)
   becomes `env.py` everywhere without stopping. `install` warns when the
-  sample has a variable the real file lacks or the file is not 640
-  root:`ENV_GROUP`, and refuses an `env.py` inside the repository.
+  sample has a variable the real file lacks, sets the file to 640
+  root:`ENV_GROUP` (a hand-made root:root file stopped the application), and refuses an `env.py` inside the repository.
 - **`stg2prod` shows commits and `--stat`, not the full diff** (`DIFF=1` adds
   it): what is deployed was already tested on staging. If dev has moved on
   since, its undeployed commits are shown *with* their full diff, as a
