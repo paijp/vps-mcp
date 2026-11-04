@@ -36,7 +36,7 @@ names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1
 masked = $(if $(RAW),$(1),{ rc=$$( { { $(1) 2>&1; echo $$? >&3; } | sh scripts/mask.sh >&4; } 3>&1 ); } 4>&1; exit $$rc)
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list domains mcpupdate check checkall
+.PHONY: help image install-binaries install-services list domains mcpupdate check checkall status
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -69,7 +69,9 @@ help:
 	@printf "                                  VPS for alice at test.example.org\n"
 	@printf "  make example.net__bob@example.com.done\n"
 	@printf "                                  VPS for bob at the domain apex\n"
-	@printf "  make list                       List VPS containers by domain\n\n"
+	@printf "  make list                       List VPS containers by domain\n"
+	@printf "  make status                     Where each hostname leads (zone, public DNS, container,\n"
+	@printf "                                  CERT / CERT+MCP, forwarding); <fqdn>.status for one name\n\n"
 	@printf "Three-container sets (production / staging / development):\n"
 	@printf "  make shop.example.org__alice@example.com.create3\n"
 	@printf "                                  shop.example.org (prod), shop-stg.example.org,\n"
@@ -88,6 +90,7 @@ help:
 	@printf "  make example.net.getcert        Let's Encrypt cert (+ names in /etc/vps-mcp/cert-names)\n"
 	@printf "                                  once DNS points here; re-run to retry or add names\n"
 	@printf "  make example.net.unforward      Serve 443 here; app.d/forward.conf still proxies the rest\n"
+	@printf "  make example.net.unforwardhttps Serve 443 here, keep port 80 proxied to the old server\n"
 	@printf "  make example.net.forward        Back to forward mode (OLD=<IP> to change the target)\n"
 	@printf "  make example.net.mode           Show mode and certificate\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
@@ -638,6 +641,17 @@ endef
 	echo "== $$c-web: make status (masked)"; \
 	$(call masked,podman exec $$c-web make -s -C /srv/app status)
 
+# Where every hostname of this host's domains leads, one line per port:
+# zone here / public DNS (8.8.8.8; RESOLVER=<ip> to change) -> this host ->
+# container -> CERT / CERT+MCP / HTTPS-REDIRECT / the old server. Read-only.
+#   make status                    every container, zone A record and cert-name
+#   make <fqdn>.status             one name (with its staging / dev)
+status:
+	@bash scripts/status.sh
+
+%.status:
+	@bash scripts/status.sh $*
+
 # Status and git HEAD of the three containers, then dev's recent history with
 # the stg/main and prod/main markers.
 %.list3:
@@ -678,6 +692,9 @@ endef
 #                      /etc/vps-mcp/cert-names (one certificate). Re-run when
 #                      a name is added or a first attempt failed.
 #   <host>.unforward   leave forward mode (refused without a valid certificate)
+#   <host>.unforwardhttps  the same for 443 only; port 80 keeps proxying to
+#                      the old server (plain-http devices); unforward later
+#                      switches port 80 too
 #   <host>.forward     back to forward mode; OLD=<IP> changes the target
 #   <host>.mode        show mode, forward target and certificate
 %.getcert:
@@ -688,6 +705,11 @@ endef
 %.unforward:
 	@podman container exists $*-web || { echo "Error: container $*-web not found."; exit 1; }
 	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh unforward
+	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
+
+%.unforwardhttps:
+	@podman container exists $*-web || { echo "Error: container $*-web not found."; exit 1; }
+	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh unforwardhttps
 	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
 
 %.forward:

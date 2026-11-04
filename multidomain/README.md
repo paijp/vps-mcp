@@ -436,6 +436,10 @@ The usual sequence:
    `listen 80; server_name <device name>;` server block in `conf.d/` that
    proxies to `http://<old IP>`. After `unforward`, port 80 otherwise redirects
    to HTTPS.
+   Or use `make example.net.unforwardhttps` in step 5 instead: it serves 443
+   here but keeps all of port 80 proxied to the old server (ACME answered
+   here first), so nothing breaks on plain http; a later
+   `make example.net.unforward` switches port 80 to the redirect too.
 5. `make example.net.unforward` (refused until step 3 succeeded). This container
    now serves 443: the MCP server and everything ported answer here, the rest
    still goes to the old server through `app.d/forward.conf`.
@@ -460,6 +464,20 @@ The usual sequence:
 Once the names point here, `ssh <old name>` reaches this host instead (host
 key warning); connect to the old server by its IP, e.g.
 `ssh -o HostKeyAlias=<old name> -o HostName=<old IP> <old name>`.
+
+`make status` (or `make example.net.status`) shows, per hostname and port,
+where a request goes: this host's zone and public DNS (8.8.8.8), the
+container, whether it terminates TLS (`CERT`, `CERT+MCP`) and where it still
+forwards, e.g.
+
+```
+example.net:
+    (example.net.dnsdone->)(DNS->)203.0.113.1:80 -> example.net-web -> HTTPS-REDIRECT
+    (example.net.dnsdone->)203.0.113.1:443 -> example.net-web -> (DNS->)203.0.113.5:443
+```
+
+(the zone already points here, public DNS still at the old server, the
+container still in forward mode).
 
 `make example.net.forward` (optionally `OLD=<IP>`) returns to forward mode and
 `make example.net.mode` shows the mode and certificate. Everything runs inside the
