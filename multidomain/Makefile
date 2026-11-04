@@ -30,7 +30,7 @@ endef
 names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1,$(_N)))$(eval _S := $(word 2,$(_N)))$(eval _D := $(word 3,$(_N)))
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list domains mcpupdate check checkall
+.PHONY: help image install-binaries install-services list domains mcpupdate check checkall status
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -63,7 +63,9 @@ help:
 	@printf "                                  VPS for alice at test.example.org\n"
 	@printf "  make example.net__bob@example.com.done\n"
 	@printf "                                  VPS for bob at the domain apex\n"
-	@printf "  make list                       List VPS containers by domain\n\n"
+	@printf "  make list                       List VPS containers by domain\n"
+	@printf "  make status                     Where each hostname leads (zone, public DNS, container,\n"
+	@printf "                                  CERT / CERT+MCP, forwarding); <fqdn>.status for one name\n\n"
 	@printf "Three-container sets (production / staging / development):\n"
 	@printf "  make shop.example.org__alice@example.com.create3\n"
 	@printf "                                  shop.example.org (prod), shop-stg.example.org,\n"
@@ -618,6 +620,17 @@ endef
 	fi; \
 	echo "==> make install on $(_P)-web"; \
 	podman exec $(_P)-web make -C /srv/app install
+
+# Where every hostname of this host's domains leads, one line per port:
+# zone here / public DNS (8.8.8.8; RESOLVER=<ip> to change) -> this host ->
+# container -> CERT / CERT+MCP / HTTPS-REDIRECT / the old server. Read-only.
+#   make status                    every container, zone A record and cert-name
+#   make <fqdn>.status             one name (with its staging / dev)
+status:
+	@bash scripts/status.sh
+
+%.status:
+	@bash scripts/status.sh $*
 
 # Status and git HEAD of the three containers, then dev's recent history with
 # the stg/main and prod/main markers.
