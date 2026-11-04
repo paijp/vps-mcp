@@ -80,6 +80,7 @@ help:
 	@printf "  make example.net.getcert        Let's Encrypt cert (+ names in /etc/vps-mcp/cert-names)\n"
 	@printf "                                  once DNS points here; re-run to retry or add names\n"
 	@printf "  make example.net.unforward      Serve 443 here; app.d/forward.conf still proxies the rest\n"
+	@printf "  make example.net.unforwardhttps Serve 443 here, keep port 80 proxied to the old server\n"
 	@printf "  make example.net.forward        Back to forward mode (OLD=<IP> to change the target)\n"
 	@printf "  make example.net.mode           Show mode and certificate\n\n"
 	@printf "Update the MCP app (index.mjs / package.json):\n"
@@ -658,6 +659,9 @@ endef
 #                      /etc/vps-mcp/cert-names (one certificate). Re-run when
 #                      a name is added or a first attempt failed.
 #   <host>.unforward   leave forward mode (refused without a valid certificate)
+#   <host>.unforwardhttps  the same for 443 only; port 80 keeps proxying to
+#                      the old server (plain-http devices); unforward later
+#                      switches port 80 too
 #   <host>.forward     back to forward mode; OLD=<IP> changes the target
 #   <host>.mode        show mode, forward target and certificate
 %.getcert:
@@ -668,6 +672,11 @@ endef
 %.unforward:
 	@podman container exists $*-web || { echo "Error: container $*-web not found."; exit 1; }
 	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh unforward
+	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
+
+%.unforwardhttps:
+	@podman container exists $*-web || { echo "Error: container $*-web not found."; exit 1; }
+	podman exec $*-web /usr/local/bin/vps-mcp-mode.sh unforwardhttps
 	@podman exec $*-web /usr/local/bin/vps-mcp-mode.sh status
 
 %.forward:

@@ -21,8 +21,15 @@
 #                     locally (falling back to the old server, so its own
 #                     renewals keep working) and proxies everything else to
 #                     IP:80. IP defaults to /etc/vps-mcp/forward-ip.
-#   unforward         back to normal: this container's nginx serves 443 again.
-#                     Refused until getcert has obtained a valid certificate.
+#   unforward         back to normal: this container's nginx serves 443 again
+#                     and port 80 redirects to HTTPS (from forward mode or
+#                     from unforwardhttps). Refused until getcert has obtained
+#                     a valid certificate.
+#   unforwardhttps    like unforward for 443 only: this container serves
+#                     HTTPS (its certificate, the MCP server, app.d/), while
+#                     port 80 keeps proxying to the old server (ACME answered
+#                     here first), e.g. for devices that can only use plain
+#                     http. unforward later switches port 80 too.
 #   seed IP [ROOT]    write the "everything except the MCP server goes to IP"
 #                     configuration under ROOT (default /): app.d/forward.conf
 #                     instead of app.d/default.conf, and an empty
@@ -117,6 +124,13 @@ EOF
 listen 127.0.0.1:8443 ssl proxy_protocol default_server;
 listen 127.0.0.1:8444 ssl;
 EOF
+    http80_forward_files "$ip"
+}
+
+# Port 80 of forward mode (also kept by unforwardhttps): ACME challenges
+# answered here first, everything else proxied to the old server.
+http80_forward_files() {
+    local ip=$1
     rm -f $N/http80.d/*.conf
     {
         echo "# Forward mode (vps-mcp-mode.sh): ACME challenges here first, then $ip."
@@ -136,10 +150,20 @@ EOF
 # The image keeps pristine copies of the switched files, so normal mode is
 # exactly what the image ships (no second copy of their content here).
 normal_files() {
-    rm -f $N/stream.d/forward.conf
-    cp $SHARE/listen443.conf $SHARE/listen443-main.conf $N/
+    https_normal_files
     rm -f $N/http80.d/*.conf
     cp $SHARE/http80-default.conf $N/http80.d/default.conf
+}
+
+https_normal_files() {
+    rm -f $N/stream.d/forward.conf
+    cp $SHARE/listen443.conf $SHARE/listen443-main.conf $N/
+}
+
+# unforwardhttps: HTTPS served here, port 80 still forwarded.
+https_only_files() {
+    https_normal_files
+    http80_forward_files "$1"
 }
 
 cmd=${1:-status}
@@ -201,10 +225,19 @@ forward)
     echo "vps-mcp-mode: forward mode — 443 passes through to $ip, 80 proxies to $ip"
     ;;
 unforward)
-    [[ -f $N/stream.d/forward.conf ]] || { echo "vps-mcp-mode: not in forward mode"; exit 0; }
+    [[ -f $N/stream.d/forward.conf || -f $N/http80.d/forward.conf ]] ||
+        { echo "vps-mcp-mode: not in forward mode"; exit 0; }
     cert_ok || die "no valid Let's Encrypt certificate yet; run getcert first (make $SUBDOMAIN.getcert)"
     apply normal_files
-    echo "vps-mcp-mode: forward mode off — this container serves 443"
+    echo "vps-mcp-mode: forward mode off — this container serves 443, port 80 redirects to HTTPS"
+    ;;
+unforwardhttps)
+    ip=$(cat "$IPF" 2>/dev/null || true)
+    [[ -f $N/stream.d/forward.conf ]] || { echo "vps-mcp-mode: 443 is not forwarded"; exit 0; }
+    valid_ip "$ip" || die "no saved forward IP ($IPF)"
+    cert_ok || die "no valid Let's Encrypt certificate yet; run getcert first (make $SUBDOMAIN.getcert)"
+    apply https_only_files "$ip"
+    echo "vps-mcp-mode: this container serves 443; port 80 still proxies to $ip (unforward switches it too)"
     ;;
 seed)
     ip=${2:-}; root=${3:-/}
@@ -231,6 +264,8 @@ EOF
 status)
     if [[ -f $N/stream.d/forward.conf ]]; then
         echo "mode:    forward -> $(cat "$IPF" 2>/dev/null || echo '?')"
+    elif [[ -f $N/http80.d/forward.conf ]]; then
+        echo "mode:    https here, port 80 forward -> $(cat "$IPF" 2>/dev/null || echo '?') (unforwardhttps)"
     else
         echo "mode:    normal"
     fi
@@ -242,6 +277,6 @@ status)
     fi
     ;;
 *)
-    die "usage: vps-mcp-mode.sh getcert [--no-check] | forward [IP] | unforward | seed IP [ROOT] | status"
+    die "usage: vps-mcp-mode.sh getcert [--no-check] | forward [IP] | unforward | unforwardhttps | seed IP [ROOT] | status"
     ;;
 esac

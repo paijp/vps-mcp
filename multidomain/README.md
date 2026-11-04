@@ -407,6 +407,10 @@ The usual sequence:
    `listen 80; server_name <device name>;` server block in `conf.d/` that
    proxies to `http://<old IP>`. After `unforward`, port 80 otherwise redirects
    to HTTPS.
+   Or use `make example.net.unforwardhttps` in step 5 instead: it serves 443
+   here but keeps all of port 80 proxied to the old server (ACME answered
+   here first), so nothing breaks on plain http; a later
+   `make example.net.unforward` switches port 80 to the redirect too.
 5. `make example.net.unforward` (refused until step 3 succeeded). This container
    now serves 443: the MCP server and everything ported answer here, the rest
    still goes to the old server through `app.d/forward.conf`.
