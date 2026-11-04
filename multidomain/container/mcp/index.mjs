@@ -132,7 +132,15 @@ const DEV_MODEL =
   `committed HEAD is sent to staging. stg/main and prod/main are ` +
   `set by the host and show what each server runs; never move them. The ` +
   `staging filesystem is visible read-only at /mnt/stg, and copies of ` +
-  `mail sent by staging arrive in /srv/stg-mail/ (one .eml per message).`;
+  `mail sent by staging arrive in /srv/stg-mail/ (one .eml per message). ` +
+  `Production data must not enter the conversation: never ask the user to ` +
+  `paste production output that shows data (file listings, log lines, ` +
+  `records, request lines); ask for 'make <fqdn>.prodstatus' or for counts, ` +
+  `sizes, timestamps and exit codes instead. Test production only with test ` +
+  `identifiers and test data, never with real ones (device IDs, user names, ` +
+  `addresses), and do not repeat real identifiers the user pastes. When ` +
+  `showing files copied from an old server, mask secrets (api keys, ` +
+  `passwords, tokens).`;
 
 // Line appended to tool descriptions so Claude can tell which host this
 // connector is bound to — guarding against acting on the wrong VPS. One
