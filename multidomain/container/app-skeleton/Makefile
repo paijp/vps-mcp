@@ -17,15 +17,22 @@ MIRROR_DIRS := etc/nginx/app.d opt/app.d
 # Applications live in files/opt/app.d/<app>/ (installed to /opt/app.d/<app>/,
 # mirrored). An application with per-server settings ships a template
 # files/opt/app.d/<app>/env.py.sample; the real file is
-# /opt/env.d/<app>/env.py, which install never writes: a person copies the
-# template there once on staging and once on production (on the development
-# container install copies it when missing).
+# /opt/env.d/<app>/env.py. When it is missing, install creates the directory
+# (750 root:ENV_GROUP), puts the template next to it as env.py.sample and stops;
+# a person fills it in and renames it to env.py, once on staging and once on
+# production. A template whose first lines contain "# env: auto" (no secrets)
+# is installed as env.py without stopping; on the development container every
+# template is.
 APPS := $(notdir $(patsubst %/,%,$(wildcard files/opt/app.d/*/)))
 ENV_APPS := $(foreach a,$(APPS),$(if $(wildcard files/opt/app.d/$(a)/env.py.sample),$(a)))
 
 # Data directories whose state `make status` summarizes (file count, total
 # size, newest change; never names or contents), e.g. /var/www/db/myapp.
 STATUS_DIRS :=
+
+# Group that may read /opt/env.d/<app>/ (directory 750, files 640, owner root):
+# the user the applications run as.
+ENV_GROUP := nginx
 
 # Other per-environment files placed by hand on each server and never
 # committed (passwords, API keys, ...). install stops if one is missing.
@@ -51,20 +58,29 @@ check:
 	@for f in files/opt/app.d/*/env.py; do \
 	    test ! -e "$$f" || { echo "$$f: settings go in /opt/env.d/<app>/env.py, not in the repository"; exit 1; }; \
 	done
-ifeq ($(ROLE),dev)
-	@for a in $(ENV_APPS); do \
-	    test -e /opt/env.d/$$a/env.py || { install -D -m 644 files/opt/app.d/$$a/env.py.sample /opt/env.d/$$a/env.py; \
-	        echo "dev: created /opt/env.d/$$a/env.py from env.py.sample"; }; \
-	done
-endif
-	@for a in $(ENV_APPS); do \
-	    f=/opt/env.d/$$a/env.py; \
-	    test -e "$$f" || { echo "missing $$f (place it by hand on this server):"; \
-	        echo "    mkdir -p /opt/env.d/$$a && cp /srv/app/files/opt/app.d/$$a/env.py.sample $$f"; exit 1; }; \
-	    for v in $$(sed -n 's/^\([A-Z_][A-Z0-9_]*\) *=.*/\1/p' files/opt/app.d/$$a/env.py.sample); do \
+	@missing=; \
+	for a in $(ENV_APPS); do \
+	    d=/opt/env.d/$$a; f=$$d/env.py; s=files/opt/app.d/$$a/env.py.sample; \
+	    if test ! -e "$$f"; then \
+	        install -d -m 750 -o root -g $(ENV_GROUP) "$$d"; \
+	        if [ "$(ROLE)" = dev ] || head -n 5 "$$s" | grep -qi '^# *env: *auto'; then \
+	            install -m 640 -o root -g $(ENV_GROUP) "$$s" "$$f"; \
+	            echo "created $$f from env.py.sample"; \
+	        else \
+	            test -e "$$d/env.py.sample" || install -m 640 -o root -g $(ENV_GROUP) "$$s" "$$d/env.py.sample"; \
+	            echo "missing $$f: fill in the template placed next to it, then rename it:"; \
+	            echo "    cd $$d && vi env.py.sample && mv env.py.sample env.py"; \
+	            missing=1; continue; \
+	        fi; \
+	    fi; \
+	    p=$$(stat -c '%a %U:%G' "$$f"); \
+	    [ "$$p" = "640 root:$(ENV_GROUP)" ] || { chown root:$(ENV_GROUP) "$$f" && chmod 640 "$$f" && \
+	        echo "fixed $$f: was $$p, now 640 root:$(ENV_GROUP) (the application reads it as $(ENV_GROUP))"; }; \
+	    for v in $$(sed -n 's/^\([A-Z_][A-Z0-9_]*\) *=.*/\1/p' "$$s"); do \
 	        grep -q "^$$v *=" "$$f" || echo "warning: $$f has no $$v (see env.py.sample)"; \
 	    done; \
-	done
+	done; \
+	test -z "$$missing"
 	@for f in $(REQUIRED_LOCAL); do \
 	    test -e "$$f" || { echo "missing $$f (place it by hand on this server)"; exit 1; }; \
 	done

@@ -28,9 +28,14 @@ undo a decision without knowing what it was for.
   copied into, never cleaned.
 - **Secrets are placed by hand, once per server.** An application ships
   `env.py.sample`; the real `/opt/env.d/<app>/env.py` is never written by
-  `install` (on dev it is copied from the sample). `install` stops with the
-  exact copy command when it is missing, warns when the sample has a variable
-  the real file lacks, and refuses an `env.py` inside the repository.
+  `install` on staging or production (on dev it is copied from the sample).
+  When it is missing, `install` creates `/opt/env.d/<app>/` (750
+  root:`ENV_GROUP`), puts the sample next to it (640, never overwriting one a
+  person is editing) and stops with a one-line "edit, then rename" command, so
+  a person only types the secrets. A sample marked `# env: auto` (no secrets)
+  becomes `env.py` everywhere without stopping. `install` warns when the
+  sample has a variable the real file lacks, sets the file to 640
+  root:`ENV_GROUP` (a hand-made root:root file stopped the application), and refuses an `env.py` inside the repository.
 - **`stg2prod` shows commits and `--stat`, not the full diff** (`DIFF=1` adds
   it): what is deployed was already tested on staging. If dev has moved on
   since, its undeployed commits are shown *with* their full diff, as a
