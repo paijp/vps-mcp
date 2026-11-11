@@ -213,7 +213,10 @@ install-services:
 	install -m 644 host/systemd/vps-proxy443.service /etc/systemd/system/
 	install -m 644 host/systemd/vps-proxy80.socket   /etc/systemd/system/
 	install -m 644 host/systemd/vps-proxy80.service  /etc/systemd/system/
+	install -d -m 755 /etc/systemd/system/podman.service.d
+	install -m 644 host/systemd/podman.service.d/vps-mcp-quiet.conf /etc/systemd/system/podman.service.d/
 	systemctl daemon-reload
+	systemctl try-restart podman.service
 	systemctl enable --now vps-proxy443.socket vps-proxy80.socket
 	mkdir -p /etc/nftables.d; \
 	UID443=$$(id -u proxy443); UID80=$$(id -u proxy80); UID_POSTFIX=$$(id -u postfix); \

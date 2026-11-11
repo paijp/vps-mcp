@@ -191,6 +191,7 @@ check_pair host/systemd/vps-proxy443.socket   /etc/systemd/system/vps-proxy443.s
 check_pair host/systemd/vps-proxy443.service  /etc/systemd/system/vps-proxy443.service
 check_pair host/systemd/vps-proxy80.socket    /etc/systemd/system/vps-proxy80.socket
 check_pair host/systemd/vps-proxy80.service   /etc/systemd/system/vps-proxy80.service
+check_pair host/systemd/podman.service.d/vps-mcp-quiet.conf /etc/systemd/system/podman.service.d/vps-mcp-quiet.conf
 
 # ── firewalld must stay off (setupdone masks it) ────────────────────────────
 if systemctl is-active --quiet firewalld 2>/dev/null; then
