@@ -5,7 +5,8 @@
 //
 // In one-shot mode (default): prints once and exits.
 // In loop mode (--loop N):    prints every N seconds, with a "---" separator
-//                              after each batch; runs until killed.
+//
+//	after each batch; runs until killed.
 //
 // Install to: /usr/local/sbin/list-containers  (root-owned, mode 0755)
 // Run directly as root or via the pipe in vps-proxy*.service.
@@ -31,6 +32,7 @@ const (
 )
 
 type container struct {
+	Id              string   `json:"Id"`
 	Names           []string `json:"Names"`
 	State           string   `json:"State"`
 	NetworkSettings struct {
@@ -81,9 +83,38 @@ func emit(out *bufio.Writer) error {
 				break
 			}
 		}
+		if ip == "" && c.State == "running" && c.Id != "" {
+			// Podman 6 leaves IPAddress empty in the list endpoint for
+			// containers it created (older ones still report it), so ask
+			// the per-container inspect endpoint, which always has it.
+			ip = inspectIP(c.Id)
+		}
 		fmt.Fprintf(out, "%s\t%s\t%s\n", name, ip, c.State)
 	}
 	return nil
+}
+
+// inspectIP returns the container's first non-empty network IP from
+// /containers/{id}/json, or "" on any error.
+func inspectIP(id string) string {
+	resp, err := client.Get("http://d/containers/" + id + "/json")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var c container
+	if json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(&c) != nil {
+		return ""
+	}
+	for _, n := range c.NetworkSettings.Networks {
+		if n.IPAddress != "" {
+			return n.IPAddress
+		}
+	}
+	return ""
 }
 
 func main() {
