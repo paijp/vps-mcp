@@ -20,6 +20,8 @@ head -2 /etc/os-release | tr '\n' ' '; echo
 echo "kernel(running): $(uname -r)   boot: $(uptime -s)"
 echo "kernel(installed): $(rpm -q kernel-core 2>/dev/null | sed 's/kernel-core-//' | tr '\n' ' ')"
 echo "reboot needed: $(dnf -q needs-restarting -r >/dev/null 2>&1 && echo no || echo YES)"
+old=$(for p in /proc/[0-9]*; do grep -qsE " /(usr|lib|lib64)/[^ ]* \(deleted\)$" "$p/maps" && cat "$p/comm" 2>/dev/null; done | sort -u | tr '\n' ' ')
+echo "processes using replaced files (restart to apply updates): ${old:-none}"
 
 h "pending security updates (host)"
 n=$(dnf -q updateinfo list --security 2>/dev/null | wc -l)
@@ -81,7 +83,7 @@ podman system df 2>/dev/null
 
 h "containers (running)"
 if ! command -v podman >/dev/null; then echo "podman なし"; exit 0; fi
-printf '%-36s %-6s %-12s %-6s %-14s %-6s %-16s %-10s %-10s %-5s %s\n' NAME OS NGINX HTTP2 PHP-FPM PHP-S HTTPD MOD_HTTP2 NODE JAVA SECUPD
+printf '%-36s %-6s %-12s %-6s %-14s %-6s %-16s %-10s %-10s %-5s %-6s %s\n' NAME OS NGINX HTTP2 PHP-FPM PHP-S HTTPD MOD_HTTP2 NODE JAVA SECUPD RESTART
 for c in $(podman ps --format '{{.Names}}'); do
   podman exec "$c" sh -c '
     os=$(sed -n "s/.*release \([0-9.]*\).*/\1/p" /etc/rocky-release 2>/dev/null)
@@ -95,10 +97,12 @@ for c in $(podman ps --format '{{.Names}}'); do
     nd=$(v nodejs)
     jv=$(rpm -qa "java-*-openjdk-headless" 2>/dev/null | wc -l)
     su=$(dnf -q -C updateinfo list --security 2>/dev/null | wc -l)
-    printf "%-6s %-12s %-6s %-14s %-6s %-16s %-10s %-10s %-5s %s\n" "${os:--}" "${ng:--}" "$h2" "${php:--}" "$phps" "${hd:--}" "${m2:--}" "${nd:--}" "$jv" "$su"
+    rs=$(for p in /proc/[0-9]*; do grep -qsE " /(usr|lib|lib64)/[^ ]* \(deleted\)\$" "$p/maps" && cat "$p/comm" 2>/dev/null; done | sort -u | grep -vxE "systemd|systemd-.*|\(sd-pam\)|agetty|dbus-.*" | tr "\n" "," | sed "s/,\$//")
+    printf "%-6s %-12s %-6s %-14s %-6s %-16s %-10s %-10s %-5s %-6s %s\n" "${os:--}" "${ng:--}" "$h2" "${php:--}" "$phps" "${hd:--}" "${m2:--}" "${nd:--}" "$jv" "$su" "${rs:--}"
   ' 2>/dev/null | sed "s|^|$(printf '%-36s ' "$c")|"
 done
 echo
 echo "stopped containers: $(podman ps -a --filter status=exited --format '{{.Names}}' | wc -l)"
 echo "(注) SECUPD はコンテナ内のキャッシュ(dnf -C)による件数。0 でも最新とは限らない"
+echo "(注) RESTART は更新で置き換わったファイルを使い続けているプロセス(systemd 系は除く)。再起動で反映される"
 echo "(注) PHP-S は PHP 組み込みサーバ(php -S)のプロセス数。PHP 更新後は php-fpm と同様に再起動が必要"
