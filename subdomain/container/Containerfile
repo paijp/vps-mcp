@@ -1,9 +1,18 @@
 # https://github.com/paijp/vps-subdomain-mcp
 
+# ── MCP server build stage ────────────────────────────────────────────────────
+# The MCP server is a single static Go binary (stdlib only, no module
+# downloads). golang comes from AppStream, so no third-party image is needed;
+# the toolchain stays in this stage and never reaches the final image.
+FROM rockylinux:10 AS build
+RUN dnf install -y golang && dnf clean all
+COPY mcp/ /src/
+RUN cd /src && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/vps-mcp .
+
 FROM rockylinux:10
 
 # ── Base system ───────────────────────────────────────────────────────────────
-# certbot comes from EPEL; nodejs 22 from AppStream — no third-party repos.
+# certbot comes from EPEL — no third-party repos.
 # Automatic security updates use dnf-automatic-install.timer, covered by
 # Red Hat's security team through the AppStream / BaseOS / EPEL channels.
 # iproute / procps-ng / lsof / sqlite / jq are the everyday tools exec_command
@@ -18,8 +27,6 @@ RUN dnf install -y epel-release \
         openssl \
         ca-certificates \
         postfix \
-        nodejs \
-        npm \
         curl \
         dnf-automatic \
         iproute \
@@ -80,14 +87,11 @@ RUN postconf -e \
     "local_transport = error: local delivery disabled"
 
 # ── MCP server ────────────────────────────────────────────────────────────────
+# main.go is copied next to the binary so `make check` can tell which source
+# a container (or this image) is running.
 RUN mkdir -p /opt/mcp
-COPY mcp/package.json mcp/package-lock.json /opt/mcp/
-# Exactly the versions pinned in the committed package-lock.json; no package
-# install scripts run. Move dependencies forward with `make npmlock` (on one
-# machine, review, commit), then `make image` / `make mcpupdate`.
-RUN cd /opt/mcp && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
-
-COPY mcp/index.mjs /opt/mcp/index.mjs
+COPY --from=build /out/vps-mcp /opt/mcp/vps-mcp
+COPY mcp/main.go /opt/mcp/main.go
 
 # ── systemd units and scripts ─────────────────────────────────────────────────
 # mcp-server.service is NOT enabled here; vps-mcp-init.sh calls

@@ -6,7 +6,7 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/vps-mcp-env
-ExecStart=/usr/bin/node /opt/mcp/index.mjs
+ExecStart=/opt/mcp/vps-mcp
 Restart=on-failure
 RestartSec=5
 

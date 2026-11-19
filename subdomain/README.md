@@ -12,7 +12,7 @@ Internet
   │
   ├─ :443  vps-proxy (SNI passthrough, PROXY protocol v1)
   │            └─ container :443  nginx (TLS termination)
-  │                                  └─ 127.0.0.1:3000  Node.js MCP server
+  │                                  └─ 127.0.0.1:3000  Go MCP server     
   │
   └─ :80   vps-proxy-http (HTTP reverse proxy)
                └─ container :80  nginx
@@ -35,10 +35,10 @@ proxy/
   routes/                live routing table (refreshed every 5 s)
   sni/                   TLS ClientHello SNI parser
 container/
-  Containerfile          rockylinux:10 + systemd + nginx + Node.js 22
+  Containerfile          rockylinux:10 + systemd + nginx (+ Go build stage)
   nginx/nginx.conf       base nginx config (default server block removed)
   nginx/vps-mcp.conf     nginx virtual host template (server_name set by init)
-  mcp/index.mjs          MCP server (OAuth 2.1, exec_command, read_file, write_file, nginx_reload, deploy_setup)
+  mcp/main.go            MCP server (OAuth 2.1, exec_command, read_file, write_file, nginx_reload, deploy_setup)
   mcp/package.json
   systemd/mcp-server.service
   systemd/vps-mcp-init.sh   first-boot init (run via podman exec)
@@ -60,7 +60,7 @@ Makefile
 
 ### Server sizing
 
-Each container runs systemd, nginx, Postfix and a Node.js MCP server — roughly
+Each container runs systemd, nginx, Postfix and a Go MCP server — roughly
 **110–130 MB of RAM per container** at idle, plus 200–300 MB for the host
 (kernel, podman, BIND, opendkim, postfix). Periodic `dnf` runs inside the
 containers spike by several hundred MB each. Rough guide: 1 GB / 1 core for up
@@ -209,12 +209,12 @@ fresh token inside the upload loop, one per file.
 
 ## Updating the MCP app
 
-The MCP app (`index.mjs` + its `node_modules`) is baked into the image and copied
+The MCP app (a Go binary built from `container/mcp`) is baked into the image and copied
 into each container. A rollout has two independent scopes — run **both**:
 
 ```
 make image               # rebuild the image → only containers created afterwards
-make mcpupdate           # patch every running container in place (stop + cp + npm ci from package-lock.json + start,
+make mcpupdate           # patch every running container in place (go build + cp + restart,
                          #   plus any missing diagnostic tool: ss, ps, lsof, sqlite3, jq)
 make alice.mcpupdate     # patch a single container (stem → <stem>-web)
 ```
