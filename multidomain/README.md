@@ -22,7 +22,7 @@ Internet
   │
   ├─ :443  vps-proxy (SNI passthrough, PROXY protocol v1)
   │            └─ container :443  nginx (TLS termination)
-  │                                  └─ 127.0.0.1:3000  Node.js MCP server
+  │                                  └─ 127.0.0.1:3000  Go MCP server     
   │
   └─ :80   vps-proxy-http (HTTP reverse proxy)
                └─ container :80  nginx
@@ -74,7 +74,7 @@ Makefile
 
 ### Server sizing
 
-Each container runs systemd, nginx, Postfix and a Node.js MCP server — roughly
+Each container runs systemd, nginx, Postfix and a Go MCP server — roughly
 **110–130 MB of RAM per container** at idle, plus 200–300 MB for the host
 (kernel, podman, BIND, opendkim, postfix). Periodic `dnf` runs inside the
 containers spike by several hundred MB each. Rough guide: 1 GB / 1 core for up
@@ -88,7 +88,7 @@ but mitigation is no substitute for enough RAM.
 
 A [three-container set](#three-container-sets-production--staging--development)
 needs less than three standalone containers: staging and production run no
-Node.js. Measured on a 449 MB host with zram: about 60 MB resident for the dev
+MCP server. Measured on a 449 MB host with zram: about 60 MB resident for the dev
 container and 12 MB each for staging and production at idle, before the
 application's own processes. Two simultaneous container `dnf` runs peaked at
 about 320 MB of swap, mostly absorbed by zram. Plan on 1 GB or more per set.
@@ -533,12 +533,12 @@ fresh token inside the upload loop, one per file.
 
 ## Updating the MCP app
 
-The MCP app (`index.mjs` + its `node_modules`) is baked into the image and copied
+The MCP app (a Go binary built from `container/mcp`) is baked into the image and copied
 into each container. A rollout has two independent scopes — run **both**:
 
 ```
 make image               # rebuild the image → only containers created afterwards
-make mcpupdate           # patch every running container in place (stop + cp + npm ci from package-lock.json + start,
+make mcpupdate           # patch every running container in place (go build + cp + restart,
                          #   plus any missing diagnostic tool: ss, ps, lsof, sqlite3, jq)
 make test.example.org.mcpupdate  # patch a single container (stem → <stem>-web)
 ```

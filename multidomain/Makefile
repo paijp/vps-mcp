@@ -36,7 +36,7 @@ names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1
 masked = $(if $(RAW),$(1),{ rc=$$( { { $(1) 2>&1; echo $$? >&3; } | sh scripts/mask.sh >&4; } 3>&1 ); } 4>&1; exit $$rc)
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list domains mcpupdate check checkall status hostcheck npmlock
+.PHONY: help image install-binaries install-services list domains mcpupdate check checkall status hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -93,9 +93,9 @@ help:
 	@printf "  make example.net.unforwardhttps Serve 443 here, keep port 80 proxied to the old server\n"
 	@printf "  make example.net.forward        Back to forward mode (OLD=<IP> to change the target)\n"
 	@printf "  make example.net.mode           Show mode and certificate\n\n"
-	@printf "Update the MCP app (index.mjs / package.json):\n"
+	@printf "Update the MCP app (container/mcp, Go):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
-	@printf "  make mcpupdate            Update ALL running MCP containers in place (stop + cp + npm install + start,\n"
+	@printf "  make mcpupdate            Update ALL running MCP containers in place (go build + cp + restart,\n"
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq, dig),\n"
 	@printf "                            and the helper scripts (vps-mcp-mode.sh, ...) in EVERY container\n"
 	@printf "  make test.example.org.mcpupdate  Update a single running container (stem -> <stem>-web;\n"
@@ -103,11 +103,6 @@ help:
 	@printf "  make test.example.org.scriptupdate  Only the helper scripts and tools of one container\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
 	@printf "Refresh the MCP app's pinned dependencies (supply-chain safe):\n"
-	@printf "  make npmlock [BEFORE=YYYY-MM-DD]\n"
-	@printf "      Regenerates package-lock.json choosing only versions published\n"
-	@printf "      at least 7 days ago, then shows npm audit / audit signatures.\n"
-	@printf "      Review and commit it; mcpupdate installs exactly that lockfile\n"
-	@printf "      (npm ci --ignore-scripts). BEFORE= overrides the cooldown.\n\n"
 	@printf "Read-only health/security check of this host and its containers:\n"
 	@printf "  make hostcheck\n"
 	@printf "      Prints versions, settings and counts only (no log contents or\n"
@@ -750,7 +745,7 @@ list:
 	awk -F'\t' '$$1 != prev { print "\n" $$1; prev = $$1 } { printf "  %-40s %s\n", $$2, $$3 }'
 
 # ── MCP app update ─────────────────────────────────────────────────────────────
-# The MCP app (index.mjs + its node_modules) is baked into the image and copied
+# The MCP app (a Go binary built from container/mcp) is baked into the image and copied
 # into each container's writable layer at build time. Updating therefore has two
 # independent scopes, and a full rollout needs BOTH:
 #
@@ -761,9 +756,9 @@ list:
 # In-place is used (not recreate) because each container holds persistent state
 # in its writable layer — the Bearer token hash (/etc/mcp-server), the deploy
 # owner binding, certbot certificates, and /var/www/html — which a recreate from
-# a new image would discard. package.json is copied too and `npm install` is run
-# so newly added dependencies (e.g. jose for OIDC) are present before restart.
-# package-lock.json is copied as well and installed with npm ci --ignore-scripts.
+# a new image would discard. The binary is built on the host with `go` (the
+# same toolchain install-binaries uses) and swapped in; the Bearer hash is kept,
+# so connected Claude clients continue without logging in again.
 #
 # When upgrading the broker and content containers together, update the oauth
 # container first (make oauth.<domain>.mcpupdate) so /mcp/resolve returns owner_id before
@@ -799,13 +794,6 @@ mcpupdate:
 #   check              summary (status line per file; nginx diffs still shown)
 #   checkall           verbose (full diff for every differing file)
 #   <stem>.check       verbose check of one container (<stem>-web), host skipped
-# Regenerate the MCP app's package-lock.json with a 7-day cooldown (only
-# versions published at least 7 days ago). Run on one machine, review, commit.
-#   make npmlock                     # default cooldown
-#   make npmlock BEFORE=YYYY-MM-DD   # override for an urgent dependency fix
-npmlock:
-	@BEFORE="$(BEFORE)" sh scripts/npm-lock.sh
-
 # Read-only health/security report (versions, settings and counts only).
 hostcheck:
 	@bash scripts/host-check.sh
@@ -859,16 +847,17 @@ checkall:
 	fi; \
 	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
 	echo "==> updating $$c"; \
-	podman exec $$c systemctl stop mcp-server; \
-	podman cp container/mcp/package.json      $$c:/opt/mcp/package.json; \
-	podman cp container/mcp/package-lock.json $$c:/opt/mcp/package-lock.json; \
-	podman cp container/mcp/index.mjs         $$c:/opt/mcp/index.mjs; \
-	: 'Dependencies come only from the committed package-lock.json (npm ci,'; \
-	: '--ignore-scripts); move them forward with make npmlock + commit.'; \
-	: 'Non-fatal: the previous node_modules is kept on failure.'; \
-	podman exec -i $$c sh -s /opt/mcp < scripts/mcp-npm-ci.sh || \
-	    echo "    $$c: WARNING: npm ci failed; dependencies not refreshed"; \
-	podman exec $$c systemctl start mcp-server; \
+	bin=$$(mktemp); trap 'rm -f "$$bin"' EXIT; \
+	: 'Build BEFORE touching the container, so a compile error leaves the old server running.'; \
+	(cd container/mcp && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$$bin" .); \
+	podman cp "$$bin" $$c:/opt/mcp/vps-mcp.new; \
+	podman cp container/mcp/main.go $$c:/opt/mcp/main.go; \
+	podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
+	: 'Atomic rename, drop Node.js-era leftovers, restart. The Bearer hash in'; \
+	: '/etc/mcp-server is untouched, so connected clients need no new login.'; \
+	podman exec $$c sh -c 'chmod 755 /opt/mcp/vps-mcp.new && mv -f /opt/mcp/vps-mcp.new /opt/mcp/vps-mcp && \
+	    cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules .npmci.* && \
+	    systemctl daemon-reload && systemctl restart mcp-server'; \
 	sh scripts/ensure-tools.sh $$c; \
 	echo "    $$c updated"; \
 	: 'Called directly (not from mcpupdate): the scripts of the whole set too.'; \

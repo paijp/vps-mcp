@@ -264,10 +264,10 @@ fi
 # ── container image staleness (informational) ────────────────────────────────
 # The MCP app inside each container is refreshed in place by `make mcpupdate`,
 # but the image itself only picks up repo changes when `make image` is re-run.
-# Compare the repo's container/mcp/{index.mjs,package.json} against the copies
+# Compare the repo's container/mcp/main.go against the copies
 # baked into the image so image drift is visible too.
 if command -v podman >/dev/null 2>&1 && podman image exists "${IMAGE:-vps-mcp:latest}" 2>/dev/null; then
-    for f in container/mcp/index.mjs container/mcp/package.json; do
+    for f in container/mcp/main.go; do
         base=$(basename "$f")
         baked="$tmp/baked.$base"
         if podman run --rm --entrypoint cat "${IMAGE:-vps-mcp:latest}" "/opt/mcp/$base" > "$baked" 2>/dev/null; then
@@ -284,7 +284,7 @@ fi
 fi  # end host-side (ONLY unset)
 
 # ── in-container files + nginx syntax (per running container) ─────────────────
-# `make mcpupdate` only replaces /opt/mcp/{index.mjs,package.json} inside each
+# `make mcpupdate` only replaces /opt/mcp/{vps-mcp,main.go} inside each
 # container; the nginx config, systemd unit and init/deploy scripts keep
 # whatever the image shipped when the container was created. A container built
 # from an old image therefore runs stale files that no host-side check reveals.
@@ -311,9 +311,7 @@ if command -v podman >/dev/null 2>&1; then
         sub=$(podman exec "$c" sed -n 's/^SUBDOMAIN=//p' /etc/vps-mcp-env 2>/dev/null)
         [ -n "$sub" ] || echo "NOTE     $c: SUBDOMAIN unknown (/etc/vps-mcp-env unreadable); server_name diff may be noisy"
 
-        check_in_container "$c" container/mcp/index.mjs             /opt/mcp/index.mjs
-        check_in_container "$c" container/mcp/package.json          /opt/mcp/package.json
-        check_in_container "$c" container/mcp/package-lock.json     /opt/mcp/package-lock.json
+        check_in_container "$c" container/mcp/main.go               /opt/mcp/main.go
         check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
         check_in_container "$c" container/systemd/vps-mcp-init.sh   /usr/local/bin/vps-mcp-init.sh
         check_in_container "$c" container/systemd/certbot-deploy.sh /usr/local/bin/certbot-deploy.sh
