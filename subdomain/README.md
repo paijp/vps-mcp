@@ -87,12 +87,12 @@ This:
 4. Configures DKIM signing (`opendkim`) and a relay-only `postfix` so containers can send mail
 5. Builds the container image (`vps-mcp:latest`) and the Go proxy binaries (`list-containers`, `vps-proxy`, `vps-proxy-http` in `/usr/local/sbin`)
 6. Installs the proxy socket/service units (`vps-proxy{80,443}`) and nftables rules, then enables + starts them
-7. Enables unattended security updates (`dnf-automatic`) and a weekly reboot (`vps-mcp-reboot.timer`, Sunday ~04:00); `podman-restart.service` brings `--restart=always` containers back up after each reboot
+7. Enables unattended updates of all packages (`dnf-automatic`, `upgrade_type = default`) and a weekly reboot (`vps-mcp-reboot.timer`, Sunday ~04:00); `podman-restart.service` brings `--restart=always` containers back up after each reboot
 8. Hardens the host against memory pressure: enables zram swap and a persistent journal, and disables the host's `dnf-makecache.timer` (see [Server sizing](#server-sizing))
 
 After setup, the domain and IP are read from `/etc/vps-mcp/host.env` automatically — no need to pass `DOMAIN=` for subsequent commands.
 
-> **Long-lived containers**: seminar containers run for weeks, so they receive Rocky Linux security updates automatically via `dnf-automatic-install.timer`. They are not rebooted individually — the host's weekly reboot plus `--restart=always` refreshes them.
+> **Long-lived containers**: seminar containers run for weeks, so they receive Rocky Linux updates automatically via `dnf-automatic-install.timer`. They are not rebooted individually — the host's weekly reboot plus `--restart=always` refreshes them.
 
 > **DNS delegation**: point your registrar's NS records for `example.com` to this server's IP before running setup, or update them afterwards.
 

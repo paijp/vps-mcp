@@ -15,7 +15,7 @@ sub_of    = $(word 1,$(subst __, ,$(1)))
 email_of  = $(word 2,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list mcpupdate check checkall
+.PHONY: help image install-binaries install-services list mcpupdate check checkall hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -42,6 +42,14 @@ help:
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
 	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
+	@printf "Read-only health/security check of this host and its containers:\n"
+	@printf "  make hostcheck\n"
+	@printf "      Prints versions, settings and counts only (no log contents or\n"
+	@printf "      IP addresses): kernel/reboot-needed, pending updates, dnf-automatic\n"
+	@printf "      and reboot timers, journald, effective sshd password auth, NoisyTCP\n"
+	@printf "      mitigation state, packages of interest, and one line per running\n"
+	@printf "      container (nginx/http2, php-fpm, httpd/mod_http2, nodejs, java).\n"
+	@printf "      Safe to paste when asking for a review.\n\n"
 	@printf "Check installed files against this checkout:\n"
 	@printf "  make check\n"
 	@printf "      Summary: one status line (OK/DIFFER/MISSING) per file for the\n"
@@ -375,6 +383,10 @@ mcpupdate:
 #   check              summary (status line per file; nginx diffs still shown)
 #   checkall           verbose (full diff for every differing file)
 #   <stem>.check       verbose check of one container (<stem>-web), host skipped
+# Read-only health/security report (versions, settings and counts only).
+hostcheck:
+	@bash scripts/host-check.sh
+
 check:
 	@sh scripts/check-installed.sh
 

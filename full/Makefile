@@ -15,7 +15,7 @@ word2_of = $(word 2,$(subst __, ,$(1)))
 word3_of = $(word 3,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help mcpupdate check
+.PHONY: help mcpupdate check hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -39,6 +39,14 @@ help:
 	@printf "      unit and /srv/deploy, installs any missing diagnostic tool\n"
 	@printf "      (ss, ps, lsof, sqlite3, jq), then restarts it. Does not\n"
 	@printf "      touch the nginx config (certbot owns TLS).\n\n"
+	@printf "Read-only health/security check of this host and its containers:\n"
+	@printf "  make hostcheck\n"
+	@printf "      Prints versions, settings and counts only (no log contents or\n"
+	@printf "      IP addresses): kernel/reboot-needed, pending updates, dnf-automatic\n"
+	@printf "      and reboot timers, journald, effective sshd password auth, NoisyTCP\n"
+	@printf "      mitigation state, packages of interest, and one line per running\n"
+	@printf "      container (nginx/http2, php-fpm, httpd/mod_http2, nodejs, java).\n"
+	@printf "      Safe to paste when asking for a review.\n\n"
 	@printf "Check installed files against this checkout:\n"
 	@printf "  make check\n"
 	@printf "      Diffs the installed copies of the MCP app, systemd units,\n"
@@ -159,7 +167,7 @@ help:
 	postconf -e "milter_default_action = accept"
 	systemctl enable --now postfix
 
-	# ── auto security updates + weekly reboot ───────────────────────────────
+	# ── auto updates (all packages) + weekly reboot ─────────────────────────
 	if command -v apt-get >/dev/null 2>&1; then \
 	    printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' \
 	        > /etc/apt/apt.conf.d/20auto-upgrades; \
@@ -333,5 +341,9 @@ mcpupdate:
 # Especially useful for configs that no update target refreshes automatically —
 # nginx/vps-mcp.conf, opendkim.conf, BIND zone/config, systemd units — so a
 # `git pull` doesn't silently leave the live host on an old copy.
+# Read-only health/security report (versions, settings and counts only).
+hostcheck:
+	@bash scripts/host-check.sh
+
 check:
 	@sh scripts/check-installed.sh

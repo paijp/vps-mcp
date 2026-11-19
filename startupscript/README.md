@@ -177,7 +177,7 @@ The script automatically builds the following:
 4. Nginx (reverse proxy, SSE-compatible)
 5. certbot (HTTP-01 method, Let's Encrypt SSL auto-acquisition and renewal)
 6. firewalld (ssh/http/https/udp53/tcp53/tcp3000)
-7. dnf-automatic (security update automation)
+7. dnf-automatic (automatic updates of all packages)
 8. fail2ban (SSH brute-force protection)
 9. Weekly reboot (Sunday 3:00 AM, for applying kernel updates)
 
@@ -241,7 +241,7 @@ Reference: [Sakura Support - How to edit zone information](https://help.sakura.a
 | IPv6 | Completely disabled at OS level (`disable_ipv6 = 1`) |
 | SSH brute-force protection | fail2ban (10-minute ban after 5 failures) |
 | Open resolver | `allow-recursion { 127.0.0.1; }` |
-| Security auto-update | dnf-automatic (security only) |
+| Auto-update | dnf-automatic (all packages; security-only misses untagged fixes) |
 | Kernel update | Weekly reboot (Sunday 3:00 AM) |
 
 ---
@@ -529,7 +529,7 @@ After SSH standard connectors become widespread, existing users can continue ope
 | Bearer token authentication | 122-bit derived from randomUUID(); brute force requires 2^122 ≈ 5×10^36 attempts — practically impossible |
 | Token comparison | Constant-time with `crypto.timingSafeEqual` |
 | HTTPS certificate | Auto-renewal by certbot (every 90 days) |
-| OS packages | Auto-updated by dnf-automatic (security) |
+| OS packages | Auto-updated by dnf-automatic (all packages) |
 | Kernel | Updates applied via weekly reboot |
 | `/token` endpoint | Already consumed secret/token; no attack surface |
 | nginx ACL (Anthropic IP) | Applied only to `/token`; `/mcp/sse` has no ACL (protected by token auth) |

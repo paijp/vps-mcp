@@ -39,8 +39,7 @@ EOF
 systemctl enable fail2ban
 systemctl start fail2ban
 systemctl restart fail2ban
-# dnf-automatic: セキュリティ更新のみ自動適用
-sed -i 's/upgrade_type = default/upgrade_type = security/' /etc/dnf/automatic.conf
+# dnf-automatic: 全パッケージの更新を自動適用(セキュリティのみだと、マイナー版更新時の再ビルド品や外部リポジトリの修正が漏れるため)
 sed -i 's/apply_updates = no/apply_updates = yes/' /etc/dnf/automatic.conf
 systemctl enable --now dnf-automatic-install.timer
 
