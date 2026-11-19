@@ -9,7 +9,7 @@ EnvironmentFile=/etc/vps-mcp/host.env
 # Optional (leading "-"): the template is created during setup and filled in
 # later, so the service must start even before credentials are present.
 EnvironmentFile=-/etc/vps-mcp/oauth.env
-ExecStart=/usr/bin/node /opt/mcp/index.mjs
+ExecStart=/opt/mcp/vps-mcp
 Restart=on-failure
 RestartSec=5
 

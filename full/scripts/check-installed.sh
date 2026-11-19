@@ -61,9 +61,7 @@ check_pair() {
 }
 
 # ── MCP app (refreshed by `make mcpupdate`) ──────────────────────────────────
-check_pair mcp/index.mjs                  /opt/mcp/index.mjs
-check_pair mcp/package.json               /opt/mcp/package.json
-check_pair mcp/package-lock.json          /opt/mcp/package-lock.json
+check_pair mcp/main.go                    /opt/mcp/main.go
 check_pair systemd/mcp-server.service     /etc/systemd/system/mcp-server.service
 check_pair systemd/certbot-deploy.sh      /etc/letsencrypt/renewal-hooks/deploy/vps-mcp.sh
 

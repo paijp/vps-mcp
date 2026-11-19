@@ -53,10 +53,10 @@ make 203.0.113.1__example.com__admin@example.com.setupdone
 ```
 
 Stem format is `IP__DOMAIN__EMAIL`. This builds: swapfile, BIND wildcard DNS, nginx,
-Node.js 22, the MCP server, certbot (waits for DNS propagation), firewall, OpenDKIM/Postfix,
+Go, the MCP server, certbot (waits for DNS propagation), firewall, OpenDKIM/Postfix,
 and auto-updates. It also hardens the host against memory pressure — enabling zram swap and
 a persistent journal, and disabling `dnf-makecache.timer` (dnf-automatic fetches metadata
-when it runs) — so `dnf`/Node.js spikes don't swap-thrash a small VPS. It also writes an
+when it runs) — so `dnf` spikes don't swap-thrash a small VPS. It also writes an
 `/etc/vps-mcp/oauth.env` template (mode 600). The MCP server starts, but GitHub login will
 not work until credentials are filled in.
 
@@ -109,14 +109,12 @@ After pulling a newer version of this repo onto the host:
 make mcpupdate
 ```
 
-This stops `mcp-server`, reinstalls `/opt/mcp` (`index.mjs`, `package.json`,
-`package-lock.json` + deps — installed with `npm ci --ignore-scripts`, i.e. exactly the
-versions pinned in the committed lockfile, with no package install scripts), the
+This builds the Go MCP server (`mcp/main.go`, standard library only — installing `golang`
+first if `go` is missing), then stops `mcp-server`, installs `/opt/mcp/vps-mcp`, the
 systemd unit and `/srv/deploy`, installs any missing diagnostic tool (`ss`, `ps`, `lsof`,
 `sqlite3`, `jq` — the list lives in `scripts/tools.sh`), then restarts it — without
 re-running the full host setup.
-Dependencies only move forward when the lockfile does: `make npmlock` regenerates it
-choosing versions published at least 7 days ago (see "Supply chain" in the top README).
+The Bearer token hash is kept, so a connected Claude client does not need to log in again.
 (The service is stopped first so a crash mid-update can't auto-restart on half-written
 files.) The same target is used internally by `make …setupdone`, so initial install and
 update share one code path. It does **not** touch the nginx config (certbot rewrites the TLS

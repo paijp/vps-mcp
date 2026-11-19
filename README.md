@@ -34,23 +34,13 @@ See each edition's README for its full threat model and operational guidance —
 **subdomain** edition adds multi-tenant concerns (tenant isolation) that the single-host
 editions do not have, so do not apply one edition's assumptions to another.
 
-### Supply chain (npm)
+### Supply chain
 
-The MCP server runs as root, so a malicious npm release would mean full host compromise.
-Dependencies are therefore pinned and installed defensively in every edition:
-
-- `package-lock.json` is committed next to each `package.json`; hosts and images install it
-  with `npm ci --omit=dev --ignore-scripts` (exact versions and integrity hashes, no
-  install/postinstall scripts). Nothing resolves "the newest in range" at update time.
-- `make npmlock` (run on one machine, then review and commit) regenerates the lockfile
-  using only versions published **at least 7 days ago** — hijacked-package releases are
-  usually detected and pulled within days — and prints `npm audit` and
-  `npm audit signatures`. For an urgent dependency fix: `make npmlock BEFORE=YYYY-MM-DD`.
-- Routine version bumps are not automated (the MCP app is planned to move to Go). Only
-  Dependabot *security* updates are enabled in the repository settings, so a vulnerable
-  dependency still produces a fix PR; merge it, or run `make npmlock`, then `make mcpupdate`.
-- After a lockfile change: `make mcpupdate` (running containers / host) and `make image`
-  (future containers).
+The MCP server runs as root. In every edition it is a single Go binary built from one
+`main.go` with the Go standard library only — no third-party modules, so there is no
+package registry in the update path and nothing to pin or audit beyond the Go toolchain,
+which comes from the distribution (`golang`). `make mcpupdate` builds it on the host;
+`make image` builds it in a throwaway build stage of the container image.
 
 ## License
 

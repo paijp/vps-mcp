@@ -15,7 +15,7 @@ word2_of = $(word 2,$(subst __, ,$(1)))
 word3_of = $(word 3,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help mcpupdate check hostcheck npmlock
+.PHONY: help mcpupdate check hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -23,7 +23,7 @@ help:
 	@printf "vps-mcp full — single-host MCP server\n\n"
 	@printf "Setup (run once as root):\n"
 	@printf "  make 203.0.113.1__example.com__admin@example.com.setupdone\n"
-	@printf "      Swapfile, BIND wildcard DNS, nginx, Node.js 22, MCP server,\n"
+	@printf "      Swapfile, BIND wildcard DNS, nginx, Go, MCP server,\n"
 	@printf "      certbot (waits for DNS propagation), firewall, auto-updates,\n"
 	@printf "      memory-pressure hardening (zram, persistent journal).\n"
 	@printf "      Also writes an /etc/vps-mcp/oauth.env template.\n\n"
@@ -34,17 +34,10 @@ help:
 	@printf "      Applies the credentials (restarts mcp-server).\n\n"
 	@printf "Update an already-set-up host (after git pull):\n"
 	@printf "  make mcpupdate\n"
-	@printf "      Stops mcp-server, reinstalls /opt/mcp (index.mjs,\n"
-	@printf "      package.json, deps installed AND npm-updated), the systemd\n"
+	@printf "      Builds the Go MCP server, swaps /opt/mcp/vps-mcp, the systemd\n"
 	@printf "      unit and /srv/deploy, installs any missing diagnostic tool\n"
 	@printf "      (ss, ps, lsof, sqlite3, jq), then restarts it. Does not\n"
 	@printf "      touch the nginx config (certbot owns TLS).\n\n"
-	@printf "Refresh the MCP app's pinned dependencies (supply-chain safe):\n"
-	@printf "  make npmlock [BEFORE=YYYY-MM-DD]\n"
-	@printf "      Regenerates package-lock.json choosing only versions published\n"
-	@printf "      at least 7 days ago, then shows npm audit / audit signatures.\n"
-	@printf "      Review and commit it; mcpupdate installs exactly that lockfile\n"
-	@printf "      (npm ci --ignore-scripts). BEFORE= overrides the cooldown.\n\n"
 	@printf "Read-only health/security check of this host and its containers:\n"
 	@printf "  make hostcheck\n"
 	@printf "      Prints versions, settings and counts only (no log contents or\n"
@@ -114,14 +107,8 @@ help:
 	        curl iproute procps-ng lsof sqlite jq; \
 	else echo "Error: no supported package manager"; exit 1; fi
 
-	# ── Node.js 22 (NodeSource) ─────────────────────────────────────────────
-	curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - 2>/dev/null || \
-	    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - 2>/dev/null || true
-	if command -v dnf >/dev/null 2>&1; then \
-	    dnf install -y nodejs; \
-	else \
-	    apt-get install -y nodejs; \
-	fi
+	# ── Go (builds the MCP server; mcpupdate installs it if missing) ─────────
+	sh scripts/ensure-go.sh
 
 	# ── BIND9 ───────────────────────────────────────────────────────────────
 	if command -v apt-get >/dev/null 2>&1; then \
@@ -239,7 +226,7 @@ help:
 	systemctl enable --now nginx
 	nginx -t && systemctl reload nginx
 
-	# ── MCP server (Node.js) ─────────────────────────────────────────────────
+	# ── MCP server (Go) ──────────────────────────────────────────────────────
 	# Install/refresh the MCP app via the shared mcpupdate target (same logic
 	# used to update an already-set-up host).
 	mkdir -p /opt/mcp
@@ -312,24 +299,23 @@ oauth.done: /etc/vps-mcp/oauth.env
 # Refresh the MCP app from this checkout without re-running full host setup.
 # Also invoked by %.setupdone so initial install and update share one path.
 # The service is stopped first: with Restart=on-failure, a crash mid-update
-# could otherwise auto-restart on half-written files / a partial npm install.
+# could otherwise auto-restart on a half-installed update.
 # Does NOT touch the nginx config: certbot rewrites TLS lines in the live conf,
 # so overwriting it would revert HTTPS. If full/nginx/vps-mcp.conf changed,
 # merge it into the live conf manually.
 mcpupdate:
+	sh scripts/ensure-go.sh
+	# Build BEFORE stopping anything: a compile error leaves the old server
+	# running. Standard library only, so no module download happens here.
+	cd mcp && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o vps-mcp.new .
 	-systemctl stop mcp-server
 	mkdir -p /opt/mcp
-	install -m 644 mcp/index.mjs    /opt/mcp/index.mjs
-	install -m 644 mcp/package.json      /opt/mcp/package.json
-	install -m 644 mcp/package-lock.json /opt/mcp/package-lock.json
-	# Dependencies come only from the committed package-lock.json (npm ci,
-	# --ignore-scripts): no "newest in range" fetch at update time, so a freshly
-	# published malicious release cannot reach this root-run service. To move
-	# dependencies forward, regenerate the lockfile with `make npmlock`, review
-	# and commit it. Failure is not fatal: the previous node_modules is kept so a
-	# registry problem does not leave mcp-server stopped.
-	sh scripts/mcp-npm-ci.sh /opt/mcp || \
-	    echo "mcpupdate: WARNING: npm ci failed; dependencies not refreshed"
+	install -m 755 mcp/vps-mcp.new /opt/mcp/vps-mcp
+	rm -f mcp/vps-mcp.new
+	install -m 644 mcp/main.go /opt/mcp/main.go
+	# Node.js-era leftovers. The Bearer hash in /etc/mcp-server is kept, so a
+	# connected Claude client continues without logging in again.
+	cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules .npmci.*
 	install -m 644 systemd/mcp-server.service /etc/systemd/system/
 	mkdir -p /srv/deploy
 	# Diagnostic tools (ss/ps/lsof/sqlite3/jq): install whichever are missing,
@@ -347,13 +333,6 @@ mcpupdate:
 # Especially useful for configs that no update target refreshes automatically —
 # nginx/vps-mcp.conf, opendkim.conf, BIND zone/config, systemd units — so a
 # `git pull` doesn't silently leave the live host on an old copy.
-# Regenerate the MCP app's package-lock.json with a 7-day cooldown (only
-# versions published at least 7 days ago). Run on one machine, review, commit.
-#   make npmlock                     # default cooldown
-#   make npmlock BEFORE=YYYY-MM-DD   # override for an urgent dependency fix
-npmlock:
-	@BEFORE="$(BEFORE)" sh scripts/npm-lock.sh
-
 # Read-only health/security report (versions, settings and counts only).
 hostcheck:
 	@bash scripts/host-check.sh
