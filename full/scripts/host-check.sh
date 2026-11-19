@@ -81,7 +81,7 @@ podman system df 2>/dev/null
 
 h "containers (running)"
 if ! command -v podman >/dev/null; then echo "podman なし"; exit 0; fi
-printf '%-36s %-6s %-12s %-6s %-14s %-16s %-10s %-10s %-5s %s\n' NAME OS NGINX HTTP2 PHP-FPM HTTPD MOD_HTTP2 NODE JAVA SECUPD
+printf '%-36s %-6s %-12s %-6s %-14s %-6s %-16s %-10s %-10s %-5s %s\n' NAME OS NGINX HTTP2 PHP-FPM PHP-S HTTPD MOD_HTTP2 NODE JAVA SECUPD
 for c in $(podman ps --format '{{.Names}}'); do
   podman exec "$c" sh -c '
     os=$(sed -n "s/.*release \([0-9.]*\).*/\1/p" /etc/rocky-release 2>/dev/null)
@@ -89,14 +89,16 @@ for c in $(podman ps --format '{{.Names}}'); do
     st() { systemctl is-active "$1" 2>/dev/null | cut -c1-3; }
     ng=$(v nginx); h2=$(nginx -T 2>/dev/null | grep -cE "^[^#]*(http2[[:space:]]+on|listen[^;]*http2)")
     php=$(v php-fpm); [ -n "$php" ] && php="$php($(st php-fpm))"
+    phps=$(pgrep -cf "(^|/)php[0-9.]* .*-S " 2>/dev/null); phps=${phps:-0}
     hd=$(v httpd);    [ -n "$hd" ]  && hd="$hd($(st httpd))"
     m2=$(v mod_http2)
     nd=$(v nodejs)
     jv=$(rpm -qa "java-*-openjdk-headless" 2>/dev/null | wc -l)
     su=$(dnf -q -C updateinfo list --security 2>/dev/null | wc -l)
-    printf "%-6s %-12s %-6s %-14s %-16s %-10s %-10s %-5s %s\n" "${os:--}" "${ng:--}" "$h2" "${php:--}" "${hd:--}" "${m2:--}" "${nd:--}" "$jv" "$su"
+    printf "%-6s %-12s %-6s %-14s %-6s %-16s %-10s %-10s %-5s %s\n" "${os:--}" "${ng:--}" "$h2" "${php:--}" "$phps" "${hd:--}" "${m2:--}" "${nd:--}" "$jv" "$su"
   ' 2>/dev/null | sed "s|^|$(printf '%-36s ' "$c")|"
 done
 echo
 echo "stopped containers: $(podman ps -a --filter status=exited --format '{{.Names}}' | wc -l)"
 echo "(注) SECUPD はコンテナ内のキャッシュ(dnf -C)による件数。0 でも最新とは限らない"
+echo "(注) PHP-S は PHP 組み込みサーバ(php -S)のプロセス数。PHP 更新後は php-fpm と同様に再起動が必要"
