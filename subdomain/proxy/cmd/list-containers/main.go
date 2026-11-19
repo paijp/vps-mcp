@@ -36,8 +36,7 @@ type container struct {
 	Names           []string `json:"Names"`
 	State           string   `json:"State"`
 	NetworkSettings struct {
-		IPAddress string `json:"IPAddress"` // set by inspect, not by list
-		Networks  map[string]struct {
+		Networks map[string]struct {
 			IPAddress string `json:"IPAddress"`
 		} `json:"Networks"`
 	} `json:"NetworkSettings"`
@@ -106,7 +105,16 @@ func inspectIP(id string) string {
 	if resp.StatusCode != http.StatusOK {
 		return ""
 	}
-	var c container
+	// Not the list type: inspect's State is an object, which would make
+	// decoding into container fail.
+	var c struct {
+		NetworkSettings struct {
+			IPAddress string `json:"IPAddress"`
+			Networks  map[string]struct {
+				IPAddress string `json:"IPAddress"`
+			} `json:"Networks"`
+		} `json:"NetworkSettings"`
+	}
 	if json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(&c) != nil {
 		return ""
 	}
