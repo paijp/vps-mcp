@@ -307,7 +307,7 @@ mcpupdate:
 	sh scripts/ensure-go.sh
 	# Build BEFORE stopping anything: a compile error leaves the old server
 	# running. Standard library only, so no module download happens here.
-	cd mcp && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o vps-mcp.new .
+	cd mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o vps-mcp.new .
 	-systemctl stop mcp-server
 	mkdir -p /opt/mcp
 	install -m 755 mcp/vps-mcp.new /opt/mcp/vps-mcp

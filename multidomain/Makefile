@@ -869,7 +869,7 @@ checkall:
 	echo "==> updating $$c"; \
 	bin=$$(mktemp); trap 'rm -f "$$bin"' EXIT; \
 	: 'Build BEFORE touching the container, so a compile error leaves the old server running.'; \
-	(cd container/mcp && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$$bin" .); \
+	(cd container/mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$$bin" .); \
 	podman cp "$$bin" $$c:/opt/mcp/vps-mcp.new; \
 	podman cp container/mcp/main.go $$c:/opt/mcp/main.go; \
 	podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
