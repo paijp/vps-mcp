@@ -66,12 +66,14 @@ for d in /sys/class/net/*; do
 done
 
 h "host packages of interest"
-pkgs nginx httpd mod_http2 php-fpm nodejs java-21-openjdk-headless java-25-openjdk-headless bind openssh-server openssl glibc postfix
+pkgs nginx httpd mod_http2 php-fpm nodejs java-21-openjdk-headless java-25-openjdk-headless bind openssh-server openssl glibc postfix mariadb-server mysql-server postgresql-server redis valkey
 for s in nginx httpd php-fpm named postfix vps-proxy443.socket vps-proxy80.socket; do
   printf '%s=%s ' "$s" "$(systemctl is-active "$s" 2>/dev/null)"
 done; echo
 [ -f /etc/named.conf ] && echo "named GSS-TSIG directives: $(grep -rcE 'tkey-gssapi' /etc/named.conf /etc/named/ 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')"
 if command -v nginx >/dev/null; then echo "host nginx http2 directives: $(http2_count)"; else echo "host nginx http2 directives: n/a"; fi
+# Databases: listening address only (127.0.0.1 / ::1 / unix = not reachable from outside)
+ss -ltnpH 2>/dev/null | awk '/"(mariadbd|mysqld|postgres|redis-server|valkey-server)"/ {match($0, /"[a-z-]+"/); n=substr($0, RSTART+1, RLENGTH-2); a=$4; if (a !~ /^(127\.|\[::1\]|0\.0\.0\.0:|\*:|\[::\]:)/) { sub(/.*:/, "", a); a="(own-ip):" a }; print "db listen:", n, a}' | sort -u
 
 h "failed units / errors since boot"
 echo "failed units: $(systemctl --failed --no-legend | wc -l)"
