@@ -538,7 +538,7 @@ into each container. A rollout has two independent scopes — run **both**:
 
 ```
 make image               # rebuild the image → only containers created afterwards
-make mcpupdate           # patch every running container in place (stop + cp + npm install/update + start,
+make mcpupdate           # patch every running container in place (stop + cp + npm ci from package-lock.json + start,
                          #   plus any missing diagnostic tool: ss, ps, lsof, sqlite3, jq)
 make test.example.org.mcpupdate  # patch a single container (stem → <stem>-web)
 ```

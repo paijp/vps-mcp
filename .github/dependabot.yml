@@ -1,0 +1,23 @@
+# Dependabot for the MCP app's npm dependencies (one package-lock.json per edition).
+# - Security updates (vulnerable dependency → fixed version) are raised as soon
+#   as an advisory is published; enable "Dependabot security updates" in the
+#   repository settings for those.
+# - Routine version updates wait 7 days after a release (cooldown), the same
+#   rule as `make npmlock`, so a freshly published malicious version is not
+#   proposed before it has had time to be detected and pulled.
+# After merging, run `make mcpupdate` (and `make image` for new containers).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /full/mcp
+      - /subdomain/container/mcp
+      - /multidomain/container/mcp
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      mcp-deps:
+        patterns: ["*"]
+    open-pull-requests-limit: 3

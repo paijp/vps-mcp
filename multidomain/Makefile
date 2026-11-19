@@ -36,7 +36,7 @@ names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1
 masked = $(if $(RAW),$(1),{ rc=$$( { { $(1) 2>&1; echo $$? >&3; } | sh scripts/mask.sh >&4; } 3>&1 ); } 4>&1; exit $$rc)
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list domains mcpupdate check checkall status hostcheck
+.PHONY: help image install-binaries install-services list domains mcpupdate check checkall status hostcheck npmlock
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -102,6 +102,12 @@ help:
 	@printf "                            for a create3 set its dev container, plus the scripts of all three)\n"
 	@printf "  make test.example.org.scriptupdate  Only the helper scripts and tools of one container\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
+	@printf "Refresh the MCP app's pinned dependencies (supply-chain safe):\n"
+	@printf "  make npmlock [BEFORE=YYYY-MM-DD]\n"
+	@printf "      Regenerates package-lock.json choosing only versions published\n"
+	@printf "      at least 7 days ago, then shows npm audit / audit signatures.\n"
+	@printf "      Review and commit it; mcpupdate installs exactly that lockfile\n"
+	@printf "      (npm ci --ignore-scripts). BEFORE= overrides the cooldown.\n\n"
 	@printf "Read-only health/security check of this host and its containers:\n"
 	@printf "  make hostcheck\n"
 	@printf "      Prints versions, settings and counts only (no log contents or\n"
@@ -757,6 +763,7 @@ list:
 # owner binding, certbot certificates, and /var/www/html — which a recreate from
 # a new image would discard. package.json is copied too and `npm install` is run
 # so newly added dependencies (e.g. jose for OIDC) are present before restart.
+# package-lock.json is copied as well and installed with npm ci --ignore-scripts.
 #
 # When upgrading the broker and content containers together, update the oauth
 # container first (make oauth.<domain>.mcpupdate) so /mcp/resolve returns owner_id before
@@ -792,6 +799,13 @@ mcpupdate:
 #   check              summary (status line per file; nginx diffs still shown)
 #   checkall           verbose (full diff for every differing file)
 #   <stem>.check       verbose check of one container (<stem>-web), host skipped
+# Regenerate the MCP app's package-lock.json with a 7-day cooldown (only
+# versions published at least 7 days ago). Run on one machine, review, commit.
+#   make npmlock                     # default cooldown
+#   make npmlock BEFORE=YYYY-MM-DD   # override for an urgent dependency fix
+npmlock:
+	@BEFORE="$(BEFORE)" sh scripts/npm-lock.sh
+
 # Read-only health/security report (versions, settings and counts only).
 hostcheck:
 	@bash scripts/host-check.sh
@@ -846,16 +860,14 @@ checkall:
 	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
 	echo "==> updating $$c"; \
 	podman exec $$c systemctl stop mcp-server; \
-	podman cp container/mcp/package.json $$c:/opt/mcp/package.json; \
-	podman cp container/mcp/index.mjs    $$c:/opt/mcp/index.mjs; \
-	podman exec $$c sh -c 'cd /opt/mcp && npm install --omit=dev'; \
-	: '`npm install` leaves an already-present package that still satisfies its'; \
-	: 'semver range untouched, so a container created months ago keeps its old'; \
-	: '(vulnerable) express tree. `npm update` moves every dependency to the'; \
-	: 'newest release inside its range. Non-fatal: a registry hiccup must not'; \
-	: 'leave mcp-server stopped.'; \
-	podman exec $$c sh -c 'cd /opt/mcp && npm update --omit=dev' || \
-	    echo "    $$c: WARNING: npm update failed; dependencies not refreshed"; \
+	podman cp container/mcp/package.json      $$c:/opt/mcp/package.json; \
+	podman cp container/mcp/package-lock.json $$c:/opt/mcp/package-lock.json; \
+	podman cp container/mcp/index.mjs         $$c:/opt/mcp/index.mjs; \
+	: 'Dependencies come only from the committed package-lock.json (npm ci,'; \
+	: '--ignore-scripts); move them forward with make npmlock + commit.'; \
+	: 'Non-fatal: the previous node_modules is kept on failure.'; \
+	podman exec -i $$c sh -s /opt/mcp < scripts/mcp-npm-ci.sh || \
+	    echo "    $$c: WARNING: npm ci failed; dependencies not refreshed"; \
 	podman exec $$c systemctl start mcp-server; \
 	sh scripts/ensure-tools.sh $$c; \
 	echo "    $$c updated"; \

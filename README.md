@@ -34,6 +34,23 @@ See each edition's README for its full threat model and operational guidance —
 **subdomain** edition adds multi-tenant concerns (tenant isolation) that the single-host
 editions do not have, so do not apply one edition's assumptions to another.
 
+### Supply chain (npm)
+
+The MCP server runs as root, so a malicious npm release would mean full host compromise.
+Dependencies are therefore pinned and installed defensively in every edition:
+
+- `package-lock.json` is committed next to each `package.json`; hosts and images install it
+  with `npm ci --omit=dev --ignore-scripts` (exact versions and integrity hashes, no
+  install/postinstall scripts). Nothing resolves "the newest in range" at update time.
+- `make npmlock` (run on one machine, then review and commit) regenerates the lockfile
+  using only versions published **at least 7 days ago** — hijacked-package releases are
+  usually detected and pulled within days — and prints `npm audit` and
+  `npm audit signatures`. For an urgent dependency fix: `make npmlock BEFORE=YYYY-MM-DD`.
+- `.github/dependabot.yml` proposes lockfile updates with the same 7-day cooldown; enable
+  Dependabot security updates in the repository settings so advisories are raised at once.
+- After a lockfile change: `make mcpupdate` (running containers / host) and `make image`
+  (future containers).
+
 ## License
 
 See [`LICENSE`](LICENSE).

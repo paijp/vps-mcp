@@ -313,6 +313,7 @@ if command -v podman >/dev/null 2>&1; then
 
         check_in_container "$c" container/mcp/index.mjs             /opt/mcp/index.mjs
         check_in_container "$c" container/mcp/package.json          /opt/mcp/package.json
+        check_in_container "$c" container/mcp/package-lock.json     /opt/mcp/package-lock.json
         check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
         check_in_container "$c" container/systemd/vps-mcp-init.sh   /usr/local/bin/vps-mcp-init.sh
         check_in_container "$c" container/systemd/certbot-deploy.sh /usr/local/bin/certbot-deploy.sh

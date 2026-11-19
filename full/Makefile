@@ -15,7 +15,7 @@ word2_of = $(word 2,$(subst __, ,$(1)))
 word3_of = $(word 3,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help mcpupdate check hostcheck
+.PHONY: help mcpupdate check hostcheck npmlock
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -39,6 +39,12 @@ help:
 	@printf "      unit and /srv/deploy, installs any missing diagnostic tool\n"
 	@printf "      (ss, ps, lsof, sqlite3, jq), then restarts it. Does not\n"
 	@printf "      touch the nginx config (certbot owns TLS).\n\n"
+	@printf "Refresh the MCP app's pinned dependencies (supply-chain safe):\n"
+	@printf "  make npmlock [BEFORE=YYYY-MM-DD]\n"
+	@printf "      Regenerates package-lock.json choosing only versions published\n"
+	@printf "      at least 7 days ago, then shows npm audit / audit signatures.\n"
+	@printf "      Review and commit it; mcpupdate installs exactly that lockfile\n"
+	@printf "      (npm ci --ignore-scripts). BEFORE= overrides the cooldown.\n\n"
 	@printf "Read-only health/security check of this host and its containers:\n"
 	@printf "  make hostcheck\n"
 	@printf "      Prints versions, settings and counts only (no log contents or\n"
@@ -314,16 +320,16 @@ mcpupdate:
 	-systemctl stop mcp-server
 	mkdir -p /opt/mcp
 	install -m 644 mcp/index.mjs    /opt/mcp/index.mjs
-	install -m 644 mcp/package.json /opt/mcp/package.json
-	# `npm install` only adds what is missing: a package already present that
-	# still satisfies its semver range (e.g. express 4.18 under ^4.18.0) is left
-	# alone, so an old tree keeps its known-vulnerable versions forever. `npm
-	# update` pulls every dependency to the newest release inside its range,
-	# which is where the express 4.x path-to-regexp / send / body-parser fixes
-	# live. Failure is not fatal: a transient registry problem must not leave
-	# mcp-server stopped.
-	cd /opt/mcp && npm install --omit=dev && { npm update --omit=dev || \
-	    echo "mcpupdate: WARNING: npm update failed; dependencies not refreshed"; }
+	install -m 644 mcp/package.json      /opt/mcp/package.json
+	install -m 644 mcp/package-lock.json /opt/mcp/package-lock.json
+	# Dependencies come only from the committed package-lock.json (npm ci,
+	# --ignore-scripts): no "newest in range" fetch at update time, so a freshly
+	# published malicious release cannot reach this root-run service. To move
+	# dependencies forward, regenerate the lockfile with `make npmlock`, review
+	# and commit it. Failure is not fatal: the previous node_modules is kept so a
+	# registry problem does not leave mcp-server stopped.
+	sh scripts/mcp-npm-ci.sh /opt/mcp || \
+	    echo "mcpupdate: WARNING: npm ci failed; dependencies not refreshed"
 	install -m 644 systemd/mcp-server.service /etc/systemd/system/
 	mkdir -p /srv/deploy
 	# Diagnostic tools (ss/ps/lsof/sqlite3/jq): install whichever are missing,
@@ -341,6 +347,13 @@ mcpupdate:
 # Especially useful for configs that no update target refreshes automatically —
 # nginx/vps-mcp.conf, opendkim.conf, BIND zone/config, systemd units — so a
 # `git pull` doesn't silently leave the live host on an old copy.
+# Regenerate the MCP app's package-lock.json with a 7-day cooldown (only
+# versions published at least 7 days ago). Run on one machine, review, commit.
+#   make npmlock                     # default cooldown
+#   make npmlock BEFORE=YYYY-MM-DD   # override for an urgent dependency fix
+npmlock:
+	@BEFORE="$(BEFORE)" sh scripts/npm-lock.sh
+
 # Read-only health/security report (versions, settings and counts only).
 hostcheck:
 	@bash scripts/host-check.sh

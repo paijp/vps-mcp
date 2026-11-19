@@ -109,12 +109,14 @@ After pulling a newer version of this repo onto the host:
 make mcpupdate
 ```
 
-This stops `mcp-server`, reinstalls `/opt/mcp` (`index.mjs`, `package.json` + deps — also
-running `npm update` so dependencies move to the newest release inside their semver range;
-plain `npm install` would leave an already-present, still-in-range version untouched), the
+This stops `mcp-server`, reinstalls `/opt/mcp` (`index.mjs`, `package.json`,
+`package-lock.json` + deps — installed with `npm ci --ignore-scripts`, i.e. exactly the
+versions pinned in the committed lockfile, with no package install scripts), the
 systemd unit and `/srv/deploy`, installs any missing diagnostic tool (`ss`, `ps`, `lsof`,
 `sqlite3`, `jq` — the list lives in `scripts/tools.sh`), then restarts it — without
 re-running the full host setup.
+Dependencies only move forward when the lockfile does: `make npmlock` regenerates it
+choosing versions published at least 7 days ago (see "Supply chain" in the top README).
 (The service is stopped first so a crash mid-update can't auto-restart on half-written
 files.) The same target is used internally by `make …setupdone`, so initial install and
 update share one code path. It does **not** touch the nginx config (certbot rewrites the TLS
