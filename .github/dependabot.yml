@@ -20,4 +20,11 @@ updates:
     groups:
       mcp-deps:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
+    # Major versions (express 5, jose 6, zod 4, ...) change APIs and need a
+    # manual port and test; routine version PRs skip them. Security updates
+    # are not affected by this ignore rule.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     open-pull-requests-limit: 3
