@@ -13,7 +13,7 @@ export LC_ALL=C
 
 h() { printf '\n== %s\n' "$*"; }
 pkgs() { for p in "$@"; do rpm -q "$p" 2>/dev/null | grep -v 'not installed'; done; }
-http2_count() { nginx -T 2>/dev/null | grep -cE '^[^#]*(http2[[:space:]]+on|listen[^;]*http2)'; }
+http2_count() { nginx -T 2>/dev/null | grep -cE '^[^#]*(http2[[:space:]]+on|listen[^;]*http2)' || true; }
 
 h "host / os"
 head -2 /etc/os-release | tr '\n' ' '; echo
@@ -69,7 +69,7 @@ for s in nginx httpd php-fpm named postfix vps-proxy443.socket vps-proxy80.socke
   printf '%s=%s ' "$s" "$(systemctl is-active "$s" 2>/dev/null)"
 done; echo
 [ -f /etc/named.conf ] && echo "named GSS-TSIG directives: $(grep -rcE 'tkey-gssapi' /etc/named.conf /etc/named/ 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')"
-echo "host nginx http2 directives: $(command -v nginx >/dev/null && http2_count || echo n/a)"
+if command -v nginx >/dev/null; then echo "host nginx http2 directives: $(http2_count)"; else echo "host nginx http2 directives: n/a"; fi
 
 h "failed units / errors since boot"
 echo "failed units: $(systemctl --failed --no-legend | wc -l)"
