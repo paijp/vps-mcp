@@ -1,0 +1,16 @@
+# https://github.com/paijp/vps-mcp
+# The Podman API service (podman.service) keeps running the binary it started
+# with: list-containers polls it every few seconds, so it never idles out.
+# After a podman upgrade the old service misreported containers created by the
+# new podman (empty IP → the proxies sent their traffic to the apex container).
+# Watch the podman binary and restart the API service when it is replaced.
+# (netavark / conmon are exec'ed per operation, so only podman itself matters.)
+[Unit]
+Description=Restart the Podman API service when podman is upgraded
+
+[Path]
+PathChanged=/usr/bin/podman
+Unit=vps-mcp-podman-upgrade.service
+
+[Install]
+WantedBy=multi-user.target

@@ -36,7 +36,7 @@ names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1
 masked = $(if $(RAW),$(1),{ rc=$$( { { $(1) 2>&1; echo $$? >&3; } | sh scripts/mask.sh >&4; } 3>&1 ); } 4>&1; exit $$rc)
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list domains mcpupdate check checkall status hostcheck
+.PHONY: help image install-binaries install-services list domains mcpupdate check checkall podmanwatch status hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -296,6 +296,10 @@ install-services:
 	install -m 644 host/systemd/podman.service.d/vps-mcp-quiet.conf /etc/systemd/system/podman.service.d/
 	systemctl daemon-reload
 	systemctl try-restart podman.service
+	install -m 644 host/systemd/vps-mcp-podman-upgrade.path    /etc/systemd/system/
+	install -m 644 host/systemd/vps-mcp-podman-upgrade.service /etc/systemd/system/
+	systemctl daemon-reload
+	systemctl enable --now vps-mcp-podman-upgrade.path
 	systemctl enable --now vps-proxy443.socket vps-proxy80.socket
 	mkdir -p /etc/nftables.d; \
 	UID443=$$(id -u proxy443); UID80=$$(id -u proxy80); UID_POSTFIX=$$(id -u postfix); \
@@ -797,6 +801,19 @@ mcpupdate:
 # Read-only health/security report (versions, settings and counts only).
 hostcheck:
 	@bash scripts/host-check.sh
+
+# Install / refresh the podman-upgrade watcher on an existing host (also part
+# of install-services). Restores the packaged vps-mcp-quiet.conf (dropping a
+# RuntimeMaxSec line an interim version added) and restarts the API service
+# once so it runs the currently installed podman.
+podmanwatch:
+	install -d -m 755 /etc/systemd/system/podman.service.d
+	install -m 644 host/systemd/podman.service.d/vps-mcp-quiet.conf /etc/systemd/system/podman.service.d/
+	install -m 644 host/systemd/vps-mcp-podman-upgrade.path    /etc/systemd/system/
+	install -m 644 host/systemd/vps-mcp-podman-upgrade.service /etc/systemd/system/
+	systemctl daemon-reload
+	systemctl enable --now vps-mcp-podman-upgrade.path
+	systemctl try-restart podman.service
 
 check:
 	@sh scripts/check-installed.sh

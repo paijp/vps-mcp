@@ -1,0 +1,9 @@
+# https://github.com/paijp/vps-mcp
+# Started by vps-mcp-podman-upgrade.path. try-restart: leave it stopped if it
+# is not running; podman.socket starts the new binary on the next request.
+[Unit]
+Description=Restart the Podman API service after a podman upgrade
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl try-restart podman.service
