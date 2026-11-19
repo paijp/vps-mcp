@@ -15,7 +15,7 @@ sub_of    = $(word 1,$(subst __, ,$(1)))
 email_of  = $(word 2,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list mcpupdate check checkall podmanwatch hostcheck
+.PHONY: help image install-binaries install-services list mcpupdate check checkall updatehost updateall hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -42,6 +42,8 @@ help:
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
 	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
+	@printf "  make updatehost           install-binaries + install-services + image (host side, in place)\n"
+	@printf "  make updateall            updatehost + mcpupdate (also every running MCP container)\n\n"
 	@printf "Refresh the MCP app's pinned dependencies (supply-chain safe):\n"
 	@printf "Read-only health/security check of this host and its containers:\n"
 	@printf "  make hostcheck\n"
@@ -393,31 +395,19 @@ mcpupdate:
 hostcheck:
 	@bash scripts/host-check.sh
 
-# Install / refresh the podman-upgrade watcher on an existing host (also part
-# of install-services). Restores the packaged vps-mcp-quiet.conf (dropping a
-# RuntimeMaxSec line an interim version added) and restarts the API service
-# once so it runs the currently installed podman.
-podmanwatch:
-	install -d -m 755 /etc/systemd/system/podman.service.d
-	install -m 644 host/systemd/podman.service.d/vps-mcp-quiet.conf /etc/systemd/system/podman.service.d/
-	install -m 644 host/systemd/vps-mcp-podman-upgrade.path    /etc/systemd/system/
-	install -m 644 host/systemd/vps-mcp-podman-upgrade.service /etc/systemd/system/
-	systemctl daemon-reload
-	systemctl enable --now vps-mcp-podman-upgrade.path
-	systemctl try-restart podman.service
+# Bring an installed host up to date with this checkout, in place:
+#   updatehost   install-binaries + install-services + image
+#                (host binaries, systemd units / nftables / postfix policy,
+#                 and the image used for containers created from now on)
+#   updateall    updatehost + mcpupdate (also every running MCP container)
+# All steps are idempotent; running containers keep serving throughout (the
+# proxies' listening sockets are held by systemd, mcpupdate keeps the Bearer
+# hash). Files these targets install are overwritten with the repo version,
+# so local edits to them are lost — `make check` first shows any drift.
+updatehost: install-binaries install-services image
 
-check:
-	@sh scripts/check-installed.sh
-
-checkall:
-	@VERBOSE=1 sh scripts/check-installed.sh
-
-# Verbose check of a single running container. Stem is the subdomain label:
-#   make alice.check    → alice-web
-#   make oauth.check    → oauth-web
-#   make default.check  → default-web
-%.check:
-	@VERBOSE=1 sh scripts/check-installed.sh $*-web
+updateall: updatehost
+	$(MAKE) --no-print-directory mcpupdate
 
 # Update one running container in place. Stem is the subdomain label:
 #   make alice.mcpupdate    → alice-web

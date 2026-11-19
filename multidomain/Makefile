@@ -36,7 +36,7 @@ names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1
 masked = $(if $(RAW),$(1),{ rc=$$( { { $(1) 2>&1; echo $$? >&3; } | sh scripts/mask.sh >&4; } 3>&1 ); } 4>&1; exit $$rc)
 
 .DEFAULT_GOAL := help
-.PHONY: help image install-binaries install-services list domains mcpupdate check checkall podmanwatch status hostcheck
+.PHONY: help image install-binaries install-services list domains mcpupdate check checkall updatehost updateall status hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -102,6 +102,8 @@ help:
 	@printf "                            for a create3 set its dev container, plus the scripts of all three)\n"
 	@printf "  make test.example.org.scriptupdate  Only the helper scripts and tools of one container\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
+	@printf "  make updatehost           install-binaries + install-services + image (host side, in place)\n"
+	@printf "  make updateall            updatehost + mcpupdate (also every running MCP container)\n\n"
 	@printf "Refresh the MCP app's pinned dependencies (supply-chain safe):\n"
 	@printf "Read-only health/security check of this host and its containers:\n"
 	@printf "  make hostcheck\n"
@@ -802,53 +804,19 @@ mcpupdate:
 hostcheck:
 	@bash scripts/host-check.sh
 
-# Install / refresh the podman-upgrade watcher on an existing host (also part
-# of install-services). Restores the packaged vps-mcp-quiet.conf (dropping a
-# RuntimeMaxSec line an interim version added) and restarts the API service
-# once so it runs the currently installed podman.
-podmanwatch:
-	install -d -m 755 /etc/systemd/system/podman.service.d
-	install -m 644 host/systemd/podman.service.d/vps-mcp-quiet.conf /etc/systemd/system/podman.service.d/
-	install -m 644 host/systemd/vps-mcp-podman-upgrade.path    /etc/systemd/system/
-	install -m 644 host/systemd/vps-mcp-podman-upgrade.service /etc/systemd/system/
-	systemctl daemon-reload
-	systemctl enable --now vps-mcp-podman-upgrade.path
-	systemctl try-restart podman.service
+# Bring an installed host up to date with this checkout, in place:
+#   updatehost   install-binaries + install-services + image
+#                (host binaries, systemd units / nftables / postfix policy,
+#                 and the image used for containers created from now on)
+#   updateall    updatehost + mcpupdate (also every running MCP container)
+# All steps are idempotent; running containers keep serving throughout (the
+# proxies' listening sockets are held by systemd, mcpupdate keeps the Bearer
+# hash). Files these targets install are overwritten with the repo version,
+# so local edits to them are lost — `make check` first shows any drift.
+updatehost: install-binaries install-services image
 
-check:
-	@sh scripts/check-installed.sh
-
-checkall:
-	@VERBOSE=1 sh scripts/check-installed.sh
-
-# Verbose check of a single running container. Stem is the hostname:
-#   make test.example.org.check   → test.example.org-web
-%.check:
-	@VERBOSE=1 sh scripts/check-installed.sh $*-web
-
-# Refresh the image's helper scripts, their pristine nginx snippets and the
-# app skeleton inside one running container (stem -> <stem>-web), plus the
-# tools they need (dig, ...). Unlike the MCP app these run on every container,
-# staging and production included: vps-mcp-mode.sh (getcert / forward /
-# unforward), vps-mcp-recv.sh (dev2stg / stg2prod), certbot-deploy.sh, and
-# vps-mcp-init.sh (used only at creation, refreshed for consistency).
-# make mcpupdate runs it for every container; <stem>.mcpupdate for the
-# containers of that stem's set.
-%.scriptupdate:
-	@set -e; c="$*-web"; \
-	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
-	for f in vps-mcp-init.sh certbot-deploy.sh vps-mcp-recv.sh vps-mcp-mode.sh; do \
-	    podman cp container/systemd/$$f $$c:/usr/local/bin/$$f; \
-	    podman exec $$c chmod 755 /usr/local/bin/$$f; \
-	done; \
-	podman exec $$c mkdir -p /usr/local/share/vps-mcp/nginx; \
-	for f in listen443.conf listen443-main.conf http80-default.conf; do \
-	    podman cp container/nginx/$$f $$c:/usr/local/share/vps-mcp/nginx/$$f; \
-	done; \
-	podman exec $$c rm -rf /usr/local/share/vps-mcp/app-skeleton; \
-	podman cp container/app-skeleton $$c:/usr/local/share/vps-mcp/app-skeleton; \
-	sh scripts/ensure-tools.sh $$c; \
-	echo "    $$c: scripts updated"
+updateall: updatehost
+	$(MAKE) --no-print-directory mcpupdate
 
 # Update one running container in place. Stem is the hostname:
 #   make test.example.org.mcpupdate   → test.example.org-web
