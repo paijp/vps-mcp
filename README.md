@@ -46,8 +46,9 @@ Dependencies are therefore pinned and installed defensively in every edition:
   using only versions published **at least 7 days ago** — hijacked-package releases are
   usually detected and pulled within days — and prints `npm audit` and
   `npm audit signatures`. For an urgent dependency fix: `make npmlock BEFORE=YYYY-MM-DD`.
-- `.github/dependabot.yml` proposes lockfile updates with the same 7-day cooldown; enable
-  Dependabot security updates in the repository settings so advisories are raised at once.
+- Routine version bumps are not automated (the MCP app is planned to move to Go). Only
+  Dependabot *security* updates are enabled in the repository settings, so a vulnerable
+  dependency still produces a fix PR; merge it, or run `make npmlock`, then `make mcpupdate`.
 - After a lockfile change: `make mcpupdate` (running containers / host) and `make image`
   (future containers).
 
