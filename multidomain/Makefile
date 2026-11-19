@@ -818,6 +818,41 @@ updatehost: install-binaries install-services image
 updateall: updatehost
 	$(MAKE) --no-print-directory mcpupdate
 
+check:
+	@sh scripts/check-installed.sh
+
+checkall:
+	@VERBOSE=1 sh scripts/check-installed.sh
+
+# Verbose check of a single running container. Stem is the hostname:
+#   make test.example.org.check   → test.example.org-web
+%.check:
+	@VERBOSE=1 sh scripts/check-installed.sh $*-web
+
+# Refresh the image's helper scripts, their pristine nginx snippets and the
+# app skeleton inside one running container (stem -> <stem>-web), plus the
+# tools they need (dig, ...). Unlike the MCP app these run on every container,
+# staging and production included: vps-mcp-mode.sh (getcert / forward /
+# unforward), vps-mcp-recv.sh (dev2stg / stg2prod), certbot-deploy.sh, and
+# vps-mcp-init.sh (used only at creation, refreshed for consistency).
+# make mcpupdate runs it for every container; <stem>.mcpupdate for the
+# containers of that stem's set.
+%.scriptupdate:
+	@set -e; c="$*-web"; \
+	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
+	for f in vps-mcp-init.sh certbot-deploy.sh vps-mcp-recv.sh vps-mcp-mode.sh; do \
+	    podman cp container/systemd/$$f $$c:/usr/local/bin/$$f; \
+	    podman exec $$c chmod 755 /usr/local/bin/$$f; \
+	done; \
+	podman exec $$c mkdir -p /usr/local/share/vps-mcp/nginx; \
+	for f in listen443.conf listen443-main.conf http80-default.conf; do \
+	    podman cp container/nginx/$$f $$c:/usr/local/share/vps-mcp/nginx/$$f; \
+	done; \
+	podman exec $$c rm -rf /usr/local/share/vps-mcp/app-skeleton; \
+	podman cp container/app-skeleton $$c:/usr/local/share/vps-mcp/app-skeleton; \
+	sh scripts/ensure-tools.sh $$c; \
+	echo "    $$c: scripts updated"
+
 # Update one running container in place. Stem is the hostname:
 #   make test.example.org.mcpupdate   → test.example.org-web
 #   make oauth.example.org.mcpupdate  → oauth.example.org-web

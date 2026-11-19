@@ -409,6 +409,19 @@ updatehost: install-binaries install-services image
 updateall: updatehost
 	$(MAKE) --no-print-directory mcpupdate
 
+check:
+	@sh scripts/check-installed.sh
+
+checkall:
+	@VERBOSE=1 sh scripts/check-installed.sh
+
+# Verbose check of a single running container. Stem is the subdomain label:
+#   make alice.check    → alice-web
+#   make oauth.check    → oauth-web
+#   make default.check  → default-web
+%.check:
+	@VERBOSE=1 sh scripts/check-installed.sh $*-web
+
 # Update one running container in place. Stem is the subdomain label:
 #   make alice.mcpupdate    → alice-web
 #   make oauth.mcpupdate    → oauth-web
