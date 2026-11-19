@@ -36,7 +36,8 @@ type container struct {
 	Names           []string `json:"Names"`
 	State           string   `json:"State"`
 	NetworkSettings struct {
-		Networks map[string]struct {
+		IPAddress string `json:"IPAddress"` // set by inspect, not by list
+		Networks  map[string]struct {
 			IPAddress string `json:"IPAddress"`
 		} `json:"Networks"`
 	} `json:"NetworkSettings"`
@@ -86,7 +87,7 @@ func emit(out *bufio.Writer) error {
 		if ip == "" && c.State == "running" && c.Id != "" {
 			// Podman 6 leaves IPAddress empty in the list endpoint for
 			// containers it created (older ones still report it), so ask
-			// the per-container inspect endpoint, which always has it.
+			// the per-container inspect endpoint.
 			ip = inspectIP(c.Id)
 		}
 		fmt.Fprintf(out, "%s\t%s\t%s\n", name, ip, c.State)
@@ -114,7 +115,9 @@ func inspectIP(id string) string {
 			return n.IPAddress
 		}
 	}
-	return ""
+	// Podman 6 reports such a container's network as "bridge" with an
+	// empty address; only the top-level IPAddress carries it.
+	return c.NetworkSettings.IPAddress
 }
 
 func main() {
