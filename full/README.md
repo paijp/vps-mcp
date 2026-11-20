@@ -44,6 +44,11 @@ the hash-only property), and login **no longer rotates** it. To revoke, delete b
 
 ## Setup
 
+A fresh minimal image may lack `git` and `make`; install them first
+(`dnf install -y git make` / `apt-get install -y git make`), then clone this
+repository. Everything else is installed by the targets below; driving them
+assumes working knowledge of make.
+
 Run as root from this directory.
 
 ### 1. Host setup

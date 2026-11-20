@@ -95,6 +95,11 @@ about 320 MB of swap, mostly absorbed by zram. Plan on 1 GB or more per set.
 
 ## Installation
 
+A fresh minimal image may lack `git` and `make`; install them first
+(`dnf install -y git make` / `apt-get install -y git make`), then clone this
+repository. Everything else is installed by the targets below; driving them
+assumes working knowledge of make.
+
 Run once as root on the host, substituting the server's public IP:
 
 ```sh
