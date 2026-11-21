@@ -296,6 +296,11 @@ if command -v podman >/dev/null 2>&1; then
         check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
         check_in_container "$c" container/systemd/vps-mcp-init.sh   /usr/local/bin/vps-mcp-init.sh
         check_in_container "$c" container/systemd/certbot-deploy.sh /usr/local/bin/certbot-deploy.sh
+        check_in_container "$c" container/systemd/vps-mcp-adopt.sh  /usr/local/libexec/vps-mcp-adopt.sh
+        # What runs vs. what waits in the inbox for the next mcp-server start.
+        run=$(podman exec "$c" /opt/mcp/vps-mcp -version 2>/dev/null | sed 's/^vps-mcp //')
+        stg=$(podman exec "$c" /var/lib/vps-mcp/incoming/vps-mcp -version 2>/dev/null | sed 's/^vps-mcp //')
+        echo "INFO     $c: mcp running: ${run:-unidentified}${stg:+; staged (adopted at next start): $stg}"
         # nginx configs use "orig" mode: operators are expected to add their own
         # location blocks, so only drift in the repo-provided content is flagged.
         check_in_container "$c" container/nginx/nginx.conf          /etc/nginx/nginx.conf          cat cat orig

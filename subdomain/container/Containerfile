@@ -99,8 +99,10 @@ COPY mcp/main.go /opt/mcp/main.go
 COPY systemd/mcp-server.service    /etc/systemd/system/mcp-server.service
 COPY systemd/vps-mcp-init.sh       /usr/local/bin/vps-mcp-init.sh
 COPY systemd/certbot-deploy.sh     /usr/local/bin/certbot-deploy.sh
+COPY systemd/vps-mcp-adopt.sh      /usr/local/libexec/vps-mcp-adopt.sh
 
-RUN chmod +x /usr/local/bin/vps-mcp-init.sh \
+RUN chmod +x /usr/local/libexec/vps-mcp-adopt.sh \
+             /usr/local/bin/vps-mcp-init.sh \
              /usr/local/bin/certbot-deploy.sh
 
 RUN systemctl enable \

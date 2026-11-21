@@ -20,7 +20,7 @@ email_of  = $(word 2,$(subst __, ,$(1)))
 # targets (sub-makes inherit it through the environment).
 export VPS_MCP_GOAL ?= $(MAKECMDGOALS)
 
-.PHONY: help image install-binaries install-services list mcpupdate check checkall updatehost updateall hostcheck
+.PHONY: help image install-binaries install-services list mcpupdate check checkall updatehost updateall mcpstage hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -43,6 +43,8 @@ help:
 	@printf "  make list                              List running VPS containers\n\n"
 	@printf "Update the MCP app (container/mcp, Go):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
+	@printf "  make mcpstage             Stage a new build in ALL running containers; each adopts it at its\n"
+	@printf "                            next mcp-server start (weekly reboot at the latest), no restart now\n"
 	@printf "  make mcpupdate            Update ALL running containers in place (go build + cp + restart,\n"
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
 	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
@@ -375,6 +377,16 @@ list:
 # container first (make oauth.mcpupdate) so /mcp/resolve returns owner_id before
 # the others try to bind it.
 
+# Stage a new build in every running container (no restart; adopted at each
+# container's next mcp-server start, at the weekly reboot at the latest).
+mcpstage:
+	@set -e; \
+	cs="$$(podman ps --filter name=-web --format '{{.Names}}')"; \
+	test -n "$$cs" || { echo "No running -web containers found."; exit 0; }; \
+	for c in $$cs; do \
+	    $(MAKE) --no-print-directory $${c%-web}.mcpstage; \
+	done
+
 mcpupdate:
 	@set -e; \
 	cs="$$(podman ps --filter name=-web --format '{{.Names}}')"; \
@@ -427,29 +439,44 @@ checkall:
 %.check:
 	@VERBOSE=1 sh scripts/check-installed.sh $*-web
 
-# Update one running container in place. Stem is the subdomain label:
-#   make alice.mcpupdate    → alice-web
-#   make oauth.mcpupdate    → oauth-web
-#   make default.mcpupdate  → default-web
-%.mcpupdate:
+# Stage a new MCP server build in one running container (stem -> <stem>-web).
+# Builds on the host and places the binary in the container's inbox
+# (/var/lib/vps-mcp/incoming); the container adopts it itself at its next
+# mcp-server start (vps-mcp-adopt.sh, run by the unit's ExecStartPre), i.e. at
+# the host's weekly reboot at the latest. The running server is not touched.
+# The first stage into a container created from an older image also installs
+# the adopt script and the unit that runs it (a daemon-reload, no restart).
+%.mcpstage:
 	@set -e; \
 	c="$*-web"; \
 	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
-	echo "==> updating $$c"; \
 	bin=$$(mktemp); trap 'rm -f "$$bin"' EXIT; \
-	: 'Build BEFORE touching the container, so a compile error leaves the old server running.'; \
+	: 'Build BEFORE touching the container, so a compile error changes nothing.'; \
 	(cd container/mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$$(sha256sum main.go | cut -c1-12)" -o "$$bin" .); \
 	new=$$("$$bin" -version | sed 's/^vps-mcp //'); \
-	old=$$(podman exec $$c sh -c 'if [ -e /opt/mcp/index.mjs ]; then echo node.js; elif [ -e /opt/mcp/main.go ]; then echo "source $$(sha256sum /opt/mcp/main.go | cut -c1-12)"; else echo none; fi'); \
-	podman cp "$$bin" $$c:/opt/mcp/vps-mcp.new; \
-	podman cp container/mcp/main.go $$c:/opt/mcp/main.go; \
-	podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
-	: 'Atomic rename, drop Node.js-era leftovers, restart. The Bearer hash in'; \
-	: '/etc/mcp-server is untouched, so connected clients need no new login.'; \
-	podman exec $$c sh -c 'chmod 755 /opt/mcp/vps-mcp.new && mv -f /opt/mcp/vps-mcp.new /opt/mcp/vps-mcp && \
-	    cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules && \
-	    rm -f /etc/systemd/system/mcp-server.service.d/go.conf && \
-	    systemctl daemon-reload && systemctl restart mcp-server'; \
-	podman exec $$c logger -t vps-mcp-update "host maintenance: replaced /opt/mcp/vps-mcp ($$old -> $$new) and restarted mcp-server; run by 'make $(VPS_MCP_GOAL)' on the host"; \
+	podman exec $$c mkdir -p /var/lib/vps-mcp/incoming /usr/local/libexec; \
+	podman cp container/systemd/vps-mcp-adopt.sh $$c:/usr/local/libexec/vps-mcp-adopt.sh; \
+	podman exec $$c chmod 755 /usr/local/libexec/vps-mcp-adopt.sh; \
+	if ! podman exec $$c cmp -s /etc/systemd/system/mcp-server.service - < container/systemd/mcp-server.service; then \
+	    podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
+	    podman exec $$c systemctl daemon-reload; \
+	fi; \
+	podman cp container/mcp/main.go $$c:/var/lib/vps-mcp/incoming/main.go; \
+	podman cp "$$bin" $$c:/var/lib/vps-mcp/incoming/vps-mcp.tmp; \
+	podman exec $$c sh -c 'chmod 755 /var/lib/vps-mcp/incoming/vps-mcp.tmp && mv -f /var/lib/vps-mcp/incoming/vps-mcp.tmp /var/lib/vps-mcp/incoming/vps-mcp'; \
+	echo "    $$c: staged $$new (adopted at the next mcp-server start)"
+
+# Update one running container now: stage, then restart mcp-server so it
+# adopts the staged binary immediately (vps-mcp-adopt.sh logs the change in
+# the container's journal; this target logs why it restarted). Also drops
+# Node.js-era leftovers. The Bearer hash in /etc/mcp-server is untouched, so
+# connected clients need no new login.
+%.mcpupdate: %.mcpstage
+	@set -e; \
+	c="$*-web"; \
+	podman exec $$c sh -c 'cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules; \
+	    rm -f /etc/systemd/system/mcp-server.service.d/go.conf; systemctl daemon-reload'; \
+	podman exec $$c logger -t vps-mcp-update "host maintenance: restarting mcp-server to adopt the staged MCP server binary; run by 'make $(VPS_MCP_GOAL)' on the host"; \
+	podman exec $$c systemctl restart mcp-server; \
 	sh scripts/ensure-tools.sh $$c; \
 	echo "    $$c updated"
