@@ -88,9 +88,11 @@ but mitigation is no substitute for enough RAM.
 
 A [three-container set](#three-container-sets-production--staging--development)
 needs less than three standalone containers: staging and production run no
-MCP server. Measured on a 449 MB host with zram: about 60 MB resident for the dev
-container and 12 MB each for staging and production at idle, before the
-application's own processes. Two simultaneous container `dnf` runs peaked at
+MCP server. Measured on a 449 MB host with zram, at idle and before the
+application's own processes: 11–19 MB per container (podman stats), and since
+the move to the Go MCP server the dev container is no heavier than staging and
+production (it was about 60 MB with the Node.js server). The Go server itself is
+about 5–12 MB resident while in use, against 35–100 MB for the Node.js one. Two simultaneous container `dnf` runs peaked at
 about 320 MB of swap, mostly absorbed by zram. Plan on 1 GB or more per set.
 
 ## Installation
