@@ -1,0 +1,14 @@
+# https://github.com/paijp/vps-mcp
+# Daily: rebuild the MCP server from the checkout below and stage it when the
+# result differs from what runs (a golang update or a pulled main.go change).
+# Staging does not restart anything; mcp-server adopts the build at its next
+# start (the weekly reboot at the latest). Never runs `git pull`.
+# Installed by `make autostage`, which fills in the checkout path.
+[Unit]
+Description=vps-mcp: rebuild and stage the MCP server if Go or its source changed
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/root
+ExecStart=/usr/bin/make --no-print-directory -C __FULLDIR__ mcpstage

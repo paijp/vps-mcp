@@ -1,0 +1,13 @@
+# https://github.com/paijp/vps-mcp
+# Runs vps-mcp-mcpstage.service daily, after dnf-automatic has had its chance
+# to update golang. Installed by `make autostage`.
+[Unit]
+Description=vps-mcp: daily MCP server rebuild/stage check
+
+[Timer]
+OnCalendar=*-*-* 07:30
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

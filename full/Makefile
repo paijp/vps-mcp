@@ -15,7 +15,7 @@ word2_of = $(word 2,$(subst __, ,$(1)))
 word3_of = $(word 3,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
-.PHONY: help mcpupdate check hostcheck
+.PHONY: help mcpupdate mcpstage autostage check hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -32,6 +32,9 @@ help:
 	@printf "  https://<DOMAIN>/mcp/callback) and run:\n"
 	@printf "  make oauth.done\n"
 	@printf "      Applies the credentials (restarts mcp-server).\n\n"
+	@printf "Stage a new MCP build (adopted at the next mcp-server start):\n"
+	@printf "  make mcpstage             build; stage only if it differs from what runs\n"
+	@printf "  make autostage            run mcpstage daily (timer; never pulls)\n\n"
 	@printf "Update an already-set-up host (after git pull):\n"
 	@printf "  make mcpupdate\n"
 	@printf "      Builds the Go MCP server, swaps /opt/mcp/vps-mcp, the systemd\n"
@@ -303,30 +306,64 @@ oauth.done: /etc/vps-mcp/oauth.env
 # Does NOT touch the nginx config: certbot rewrites TLS lines in the live conf,
 # so overwriting it would revert HTTPS. If full/nginx/vps-mcp.conf changed,
 # merge it into the live conf manually.
-mcpupdate:
-	sh scripts/ensure-go.sh
-	# Build BEFORE stopping anything: a compile error leaves the old server
-	# running. Standard library only, so no module download happens here.
-	cd mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$$(sha256sum main.go | cut -c1-12)" -o vps-mcp.new .
-	-systemctl stop mcp-server
-	mkdir -p /opt/mcp
-	install -m 755 mcp/vps-mcp.new /opt/mcp/vps-mcp
-	rm -f mcp/vps-mcp.new
-	install -m 644 mcp/main.go /opt/mcp/main.go
-	# Node.js-era leftovers. The Bearer hash in /etc/mcp-server is kept, so a
-	# connected Claude client continues without logging in again.
+# Stage: build from this checkout and, if the result differs from both the
+# running and the already staged binary, place it in the inbox
+# /var/lib/vps-mcp/incoming. Nothing is restarted: mcp-server adopts it at its
+# next start (vps-mcp-adopt.sh, the unit's ExecStartPre). Go's build cache
+# makes an unchanged rebuild nearly free, so this is cheap to run daily.
+mcpstage:
+	@sh scripts/ensure-go.sh
+	@cd mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$$(sha256sum main.go | cut -c1-12)" -o vps-mcp.new .
+	@mkdir -p /var/lib/vps-mcp/incoming /usr/local/libexec
+	@install -m 755 systemd/vps-mcp-adopt.sh /usr/local/libexec/vps-mcp-adopt.sh
+	@if ! cmp -s systemd/mcp-server.service /etc/systemd/system/mcp-server.service; then \
+	    install -m 644 systemd/mcp-server.service /etc/systemd/system/; systemctl daemon-reload; \
+	fi
+	@set -e; in=/var/lib/vps-mcp/incoming; \
+	new=$$(mcp/vps-mcp.new -version | sed 's/^vps-mcp //'); \
+	cur=$$(/opt/mcp/vps-mcp -version 2>/dev/null | sed 's/^vps-mcp //' || true); \
+	stg=$$($$in/vps-mcp -version 2>/dev/null | sed 's/^vps-mcp //' || true); \
+	if [ "$$new" = "$$cur" ]; then \
+	    rm -f mcp/vps-mcp.new $$in/vps-mcp $$in/main.go; echo "mcpstage: up to date ($$new)"; \
+	elif [ "$$new" = "$$stg" ]; then \
+	    rm -f mcp/vps-mcp.new; echo "mcpstage: already staged ($$new)"; \
+	else \
+	    install -m 644 mcp/main.go $$in/main.go; \
+	    mv -f mcp/vps-mcp.new $$in/vps-mcp; \
+	    echo "mcpstage: staged $$new (running: $${cur:-none}); adopted at the next mcp-server start"; \
+	    logger -t vps-mcp-update "maintenance: staged MCP server $$new (running: $${cur:-none}); adopted at the next mcp-server start; by 'make $(MAKECMDGOALS)'"; \
+	fi
+
+# Update now: stage, then restart mcp-server so it adopts the build at once.
+# Also refreshes the unit and /srv/deploy, installs missing diagnostic tools
+# and drops Node.js-era leftovers. The Bearer hash in /etc/mcp-server is kept,
+# so a connected Claude client continues without logging in again.
+# Does NOT touch the nginx config: certbot rewrites TLS lines in the live conf,
+# so overwriting it would revert HTTPS. If full/nginx/vps-mcp.conf changed,
+# merge it into the live conf manually.
+# Run it from a shell on the host: from inside the MCP connector, restarting
+# mcp-server would also stop this make (same systemd unit).
+mcpupdate: mcpstage
+	mkdir -p /opt/mcp /srv/deploy
 	cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules .npmci.*
-	install -m 644 systemd/mcp-server.service /etc/systemd/system/
-	mkdir -p /srv/deploy
 	# Diagnostic tools (ss/ps/lsof/sqlite3/jq): install whichever are missing,
 	# so an already-set-up host gains them without re-running setup.
 	@sh scripts/ensure-tools.sh
-	systemctl daemon-reload
+	@logger -t vps-mcp-update "maintenance: restarting mcp-server to adopt the staged MCP server binary; by 'make $(MAKECMDGOALS)'"
 	systemctl restart mcp-server
-	@logger -t vps-mcp-update "maintenance: replaced /opt/mcp/vps-mcp ($$(/opt/mcp/vps-mcp -version | sed 's/^vps-mcp //')) and restarted mcp-server; run by 'make $(MAKECMDGOALS)'"
-	@printf "mcpupdate: /opt/mcp refreshed and mcp-server restarted.\n"
+	@printf "mcpupdate: mcp-server restarted ($$(/opt/mcp/vps-mcp -version | sed 's/^vps-mcp //')).\n"
 	@printf "Note: nginx config not touched. If full/nginx/vps-mcp.conf changed,\n"
 	@printf "merge it into the live /etc/nginx conf manually (certbot owns TLS lines).\n"
+
+# Opt-in: rebuild/stage daily (vps-mcp-mcpstage.timer) from THIS checkout, so a
+# golang update reaches mcp-server at its next start without anyone running
+# make. The timer never pulls; `git pull` stays a manual step.
+autostage:
+	sed 's|__FULLDIR__|$(CURDIR)|' systemd/vps-mcp-mcpstage.service > /etc/systemd/system/vps-mcp-mcpstage.service
+	install -m 644 systemd/vps-mcp-mcpstage.timer /etc/systemd/system/
+	systemctl daemon-reload
+	systemctl enable --now vps-mcp-mcpstage.timer
+	@printf "autostage: daily stage check from $(CURDIR) enabled (systemctl list-timers vps-mcp-mcpstage.timer).\n"
 
 # ── check installed files vs this checkout ───────────────────────────────────
 # Reports OK / DIFFER / MISSING for every file the Makefile installs, replaying

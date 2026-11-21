@@ -63,6 +63,11 @@ check_pair() {
 # ── MCP app (refreshed by `make mcpupdate`) ──────────────────────────────────
 check_pair mcp/main.go                    /opt/mcp/main.go
 check_pair systemd/mcp-server.service     /etc/systemd/system/mcp-server.service
+check_pair systemd/vps-mcp-adopt.sh       /usr/local/libexec/vps-mcp-adopt.sh
+run=$(/opt/mcp/vps-mcp -version 2>/dev/null | sed 's/^vps-mcp //')
+stg=$(/var/lib/vps-mcp/incoming/vps-mcp -version 2>/dev/null | sed 's/^vps-mcp //')
+echo "INFO     mcp running: ${run:-unidentified}${stg:+; staged (adopted at next start): $stg}"
+systemctl is-enabled vps-mcp-mcpstage.timer >/dev/null 2>&1 && echo "INFO     autostage: daily stage check enabled"
 check_pair systemd/certbot-deploy.sh      /etc/letsencrypt/renewal-hooks/deploy/vps-mcp.sh
 
 # ── host units (only refreshed by re-running setupdone) ─────────────────────

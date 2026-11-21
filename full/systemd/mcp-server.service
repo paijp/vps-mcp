@@ -9,6 +9,9 @@ EnvironmentFile=/etc/vps-mcp/host.env
 # Optional (leading "-"): the template is created during setup and filled in
 # later, so the service must start even before credentials are present.
 EnvironmentFile=-/etc/vps-mcp/oauth.env
+# Adopt a binary staged by `make mcpstage`, if any; logs what it did and
+# never fails the start. See vps-mcp-adopt.sh.
+ExecStartPre=/usr/local/libexec/vps-mcp-adopt.sh
 ExecStart=/opt/mcp/vps-mcp
 Restart=on-failure
 RestartSec=5
