@@ -321,8 +321,9 @@ mcpstage:
 	fi
 	@set -e; in=/var/lib/vps-mcp/incoming; \
 	new=$$(mcp/vps-mcp.new -version | sed 's/^vps-mcp //'); \
-	cur=$$(/opt/mcp/vps-mcp -version 2>/dev/null | sed 's/^vps-mcp //' || true); \
-	stg=$$($$in/vps-mcp -version 2>/dev/null | sed 's/^vps-mcp //' || true); \
+	: 'Never run the live binary to identify it (pre -version builds would serve).'; \
+	cur=$$(cat /opt/mcp/vps-mcp.ident 2>/dev/null || true); \
+	stg=$$(timeout 10 $$in/vps-mcp -version 2>/dev/null | sed -n 's/^vps-mcp //p' || true); \
 	if [ "$$new" = "$$cur" ]; then \
 	    rm -f mcp/vps-mcp.new $$in/vps-mcp $$in/main.go; echo "mcpstage: up to date ($$new)"; \
 	elif [ "$$new" = "$$stg" ]; then \
@@ -351,7 +352,7 @@ mcpupdate: mcpstage
 	@sh scripts/ensure-tools.sh
 	@logger -t vps-mcp-update "maintenance: restarting mcp-server to adopt the staged MCP server binary; by 'make $(MAKECMDGOALS)'"
 	systemctl restart mcp-server
-	@printf "mcpupdate: mcp-server restarted ($$(/opt/mcp/vps-mcp -version | sed 's/^vps-mcp //')).\n"
+	@printf "mcpupdate: mcp-server restarted ($$(cat /opt/mcp/vps-mcp.ident 2>/dev/null || echo unidentified)).\n"
 	@printf "Note: nginx config not touched. If full/nginx/vps-mcp.conf changed,\n"
 	@printf "merge it into the live /etc/nginx conf manually (certbot owns TLS lines).\n"
 
