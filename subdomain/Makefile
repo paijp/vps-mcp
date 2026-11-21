@@ -15,6 +15,11 @@ sub_of    = $(word 1,$(subst __, ,$(1)))
 email_of  = $(word 2,$(subst __, ,$(1)))
 
 .DEFAULT_GOAL := help
+
+# The command a person ran, recorded in each container's journal by the update
+# targets (sub-makes inherit it through the environment).
+export VPS_MCP_GOAL ?= $(MAKECMDGOALS)
+
 .PHONY: help image install-binaries install-services list mcpupdate check checkall updatehost updateall hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
@@ -433,7 +438,9 @@ checkall:
 	echo "==> updating $$c"; \
 	bin=$$(mktemp); trap 'rm -f "$$bin"' EXIT; \
 	: 'Build BEFORE touching the container, so a compile error leaves the old server running.'; \
-	(cd container/mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$$bin" .); \
+	(cd container/mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$$(sha256sum main.go | cut -c1-12)" -o "$$bin" .); \
+	new=$$("$$bin" -version | sed 's/^vps-mcp //'); \
+	old=$$(podman exec $$c sh -c 'if [ -e /opt/mcp/index.mjs ]; then echo node.js; elif [ -e /opt/mcp/main.go ]; then echo "source $$(sha256sum /opt/mcp/main.go | cut -c1-12)"; else echo none; fi'); \
 	podman cp "$$bin" $$c:/opt/mcp/vps-mcp.new; \
 	podman cp container/mcp/main.go $$c:/opt/mcp/main.go; \
 	podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
@@ -443,5 +450,6 @@ checkall:
 	    cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules && \
 	    rm -f /etc/systemd/system/mcp-server.service.d/go.conf && \
 	    systemctl daemon-reload && systemctl restart mcp-server'; \
+	podman exec $$c logger -t vps-mcp-update "host maintenance: replaced /opt/mcp/vps-mcp ($$old -> $$new) and restarted mcp-server; run by 'make $(VPS_MCP_GOAL)' on the host"; \
 	sh scripts/ensure-tools.sh $$c; \
 	echo "    $$c updated"

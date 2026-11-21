@@ -7,7 +7,7 @@
 FROM rockylinux:10 AS build
 RUN dnf install -y golang && dnf clean all
 COPY mcp/ /src/
-RUN cd /src && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/vps-mcp .
+RUN cd /src && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$(sha256sum main.go | cut -c1-12)" -o /out/vps-mcp .
 
 FROM rockylinux:10
 

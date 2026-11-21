@@ -307,7 +307,7 @@ mcpupdate:
 	sh scripts/ensure-go.sh
 	# Build BEFORE stopping anything: a compile error leaves the old server
 	# running. Standard library only, so no module download happens here.
-	cd mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o vps-mcp.new .
+	cd mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$$(sha256sum main.go | cut -c1-12)" -o vps-mcp.new .
 	-systemctl stop mcp-server
 	mkdir -p /opt/mcp
 	install -m 755 mcp/vps-mcp.new /opt/mcp/vps-mcp
@@ -323,6 +323,7 @@ mcpupdate:
 	@sh scripts/ensure-tools.sh
 	systemctl daemon-reload
 	systemctl restart mcp-server
+	@logger -t vps-mcp-update "maintenance: replaced /opt/mcp/vps-mcp ($$(/opt/mcp/vps-mcp -version | sed 's/^vps-mcp //')) and restarted mcp-server; run by 'make $(MAKECMDGOALS)'"
 	@printf "mcpupdate: /opt/mcp refreshed and mcp-server restarted.\n"
 	@printf "Note: nginx config not touched. If full/nginx/vps-mcp.conf changed,\n"
 	@printf "merge it into the live /etc/nginx conf manually (certbot owns TLS lines).\n"

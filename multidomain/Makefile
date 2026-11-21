@@ -36,6 +36,11 @@ names3 = $(eval _N := $(shell sh scripts/names3.sh '$(1)'))$(eval _P := $(word 1
 masked = $(if $(RAW),$(1),{ rc=$$( { { $(1) 2>&1; echo $$? >&3; } | sh scripts/mask.sh >&4; } 3>&1 ); } 4>&1; exit $$rc)
 
 .DEFAULT_GOAL := help
+
+# The command a person ran, recorded in each container's journal by the update
+# targets (sub-makes inherit it through the environment).
+export VPS_MCP_GOAL ?= $(MAKECMDGOALS)
+
 .PHONY: help image install-binaries install-services list domains mcpupdate check checkall updatehost updateall status hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
@@ -851,6 +856,7 @@ checkall:
 	podman exec $$c rm -rf /usr/local/share/vps-mcp/app-skeleton; \
 	podman cp container/app-skeleton $$c:/usr/local/share/vps-mcp/app-skeleton; \
 	sh scripts/ensure-tools.sh $$c; \
+	podman exec $$c logger -t vps-mcp-update "host maintenance: refreshed helper scripts (/usr/local/bin/vps-mcp-*.sh, certbot-deploy.sh), nginx snippets and app skeleton; run by 'make $(VPS_MCP_GOAL)' on the host"; \
 	echo "    $$c: scripts updated"
 
 # Update one running container in place. Stem is the hostname:
@@ -869,7 +875,9 @@ checkall:
 	echo "==> updating $$c"; \
 	bin=$$(mktemp); trap 'rm -f "$$bin"' EXIT; \
 	: 'Build BEFORE touching the container, so a compile error leaves the old server running.'; \
-	(cd container/mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o "$$bin" .); \
+	(cd container/mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$$(sha256sum main.go | cut -c1-12)" -o "$$bin" .); \
+	new=$$("$$bin" -version | sed 's/^vps-mcp //'); \
+	old=$$(podman exec $$c sh -c 'if [ -e /opt/mcp/index.mjs ]; then echo node.js; elif [ -e /opt/mcp/main.go ]; then echo "source $$(sha256sum /opt/mcp/main.go | cut -c1-12)"; else echo none; fi'); \
 	podman cp "$$bin" $$c:/opt/mcp/vps-mcp.new; \
 	podman cp container/mcp/main.go $$c:/opt/mcp/main.go; \
 	podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
@@ -878,6 +886,7 @@ checkall:
 	podman exec $$c sh -c 'chmod 755 /opt/mcp/vps-mcp.new && mv -f /opt/mcp/vps-mcp.new /opt/mcp/vps-mcp && \
 	    cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules .npmci.* && \
 	    systemctl daemon-reload && systemctl restart mcp-server'; \
+	podman exec $$c logger -t vps-mcp-update "host maintenance: replaced /opt/mcp/vps-mcp ($$old -> $$new) and restarted mcp-server; run by 'make $(VPS_MCP_GOAL)' on the host"; \
 	sh scripts/ensure-tools.sh $$c; \
 	echo "    $$c updated"; \
 	: 'Called directly (not from mcpupdate): the scripts of the whole set too.'; \

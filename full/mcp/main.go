@@ -51,6 +51,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1266,7 +1267,18 @@ func sweeper() {
 	}
 }
 
+// sourceHash is the first 12 hex digits of sha256(main.go), set at build time
+// (-ldflags -X main.sourceHash=...). With the Go version it identifies the
+// running binary: `vps-mcp -version`, and the startup log line.
+var sourceHash = "unknown"
+
+func buildIdent() string { return runtime.Version() + ", source " + sourceHash }
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Println("vps-mcp " + buildIdent())
+		return
+	}
 	go sweeper()
 
 	go hotZoneLoop()
@@ -1283,6 +1295,6 @@ func main() {
 	mux.HandleFunc("POST /mcp/messages", requireAuth(handleMessages))
 
 	srv := &http.Server{Addr: listenAddr, Handler: mux, ReadHeaderTimeout: 30 * time.Second}
-	log.Printf("vps-mcp listening on %s (subdomain=%s)", listenAddr, subdomain)
+	log.Printf("vps-mcp listening on %s (subdomain=%s, %s)", listenAddr, subdomain, buildIdent())
 	log.Fatal(srv.ListenAndServe())
 }
