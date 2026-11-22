@@ -1,9 +1,16 @@
 # https://github.com/paijp/vps-mcp
 # Started by vps-mcp-podman-upgrade.path. try-restart: leave it stopped if it
 # is not running; podman.socket starts the new binary on the next request.
+#
+# The path unit fires as soon as /usr/bin/podman is replaced, while rpm is
+# still writing the rest of the package (podman.service among it). Waiting a
+# little and reloading first lets the restart use the new unit file too, and
+# avoids systemctl's "unit file changed on disk, run daemon-reload" warning.
 [Unit]
 Description=Restart the Podman API service after a podman upgrade
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/bin/sleep 15
+ExecStartPre=/usr/bin/systemctl daemon-reload
 ExecStart=/usr/bin/systemctl try-restart podman.service
