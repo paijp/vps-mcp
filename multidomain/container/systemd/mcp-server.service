@@ -6,6 +6,9 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/vps-mcp-env
+# Adopt a binary staged by host maintenance (make mcpstage), if any; logs
+# what it did and never fails the start. See vps-mcp-adopt.sh.
+ExecStartPre=/usr/local/libexec/vps-mcp-adopt.sh
 ExecStart=/opt/mcp/vps-mcp
 Restart=on-failure
 RestartSec=5

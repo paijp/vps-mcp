@@ -41,7 +41,7 @@ masked = $(if $(RAW),$(1),{ rc=$$( { { $(1) 2>&1; echo $$? >&3; } | sh scripts/m
 # targets (sub-makes inherit it through the environment).
 export VPS_MCP_GOAL ?= $(MAKECMDGOALS)
 
-.PHONY: help image install-binaries install-services list domains mcpupdate check checkall updatehost updateall status hostcheck
+.PHONY: help image install-binaries install-services list domains mcpupdate check checkall updatehost updateall mcpstage autostage status hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -100,6 +100,9 @@ help:
 	@printf "  make example.net.mode           Show mode and certificate\n\n"
 	@printf "Update the MCP app (container/mcp, Go):\n"
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
+	@printf "  make mcpstage             Stage a new build in ALL MCP containers; each adopts it at its\n"
+	@printf "                            next mcp-server start (weekly reboot at the latest), no restart now\n"
+	@printf "  make autostage            Run mcpstage daily from this checkout (timer; never pulls)\n"
 	@printf "  make mcpupdate            Update ALL running MCP containers in place (go build + cp + restart,\n"
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq, dig),\n"
 	@printf "                            and the helper scripts (vps-mcp-mode.sh, ...) in EVERY container\n"
@@ -775,6 +778,31 @@ list:
 # container first (make oauth.<domain>.mcpupdate) so /mcp/resolve returns owner_id before
 # the others try to bind it.
 
+# Stage a new build in every MCP container (no restart; adopted at each
+# container's next mcp-server start, at the weekly reboot at the latest).
+# Staging / production containers of a create3 set run no MCP: skipped.
+mcpstage:
+	@set -e; \
+	cs="$$(podman ps --filter name=-web --format '{{.Names}}')"; \
+	test -n "$$cs" || { echo "No running -web containers found."; exit 0; }; \
+	for c in $$cs; do \
+	    h=$${c%-web}; \
+	    case $$h in *-stg.*|stg.*) continue ;; esac; \
+	    d=$$(sh scripts/names3.sh $$h | cut -d' ' -f3); \
+	    podman container exists $$d-web && continue; \
+	    $(MAKE) --no-print-directory $$h.mcpstage; \
+	done
+
+# Opt-in: run mcpstage daily (vps-mcp-mcpstage.timer) from THIS checkout, so a
+# golang update reaches each MCP container at its next mcp-server start (the
+# weekly reboot at the latest) without anyone running make. Never pulls.
+autostage:
+	sed 's|__DIR__|$(CURDIR)|' host/systemd/vps-mcp-mcpstage.service > /etc/systemd/system/vps-mcp-mcpstage.service
+	install -m 644 host/systemd/vps-mcp-mcpstage.timer /etc/systemd/system/
+	systemctl daemon-reload
+	systemctl enable --now vps-mcp-mcpstage.timer
+	@printf "autostage: daily stage check from $(CURDIR) enabled (systemctl list-timers vps-mcp-mcpstage.timer).\n"
+
 mcpupdate:
 	@set -e; \
 	cs="$$(podman ps --filter name=-web --format '{{.Names}}')"; \
@@ -859,10 +887,60 @@ checkall:
 	podman exec $$c logger -t vps-mcp-update "host maintenance: refreshed helper scripts (/usr/local/bin/vps-mcp-*.sh, certbot-deploy.sh), nginx snippets and app skeleton; run by 'make $(VPS_MCP_GOAL)' on the host"; \
 	echo "    $$c: scripts updated"
 
-# Update one running container in place. Stem is the hostname:
+# Stage a new MCP server build in one running container. Stem is the hostname:
+#   make test.example.org.mcpstage   → test.example.org-web
+# (a create3 production stem stages into its dev container; staging has no MCP.)
+# Builds on the host and places the binary in the container's inbox
+# (/var/lib/vps-mcp/incoming) only when it differs from both the running
+# (/opt/mcp/vps-mcp.ident) and the staged binary; the container adopts it
+# itself at its next mcp-server start (vps-mcp-adopt.sh, ExecStartPre), i.e. at
+# the host's weekly reboot at the latest. The running server is not touched.
+# The first stage into a container created from an older image also installs
+# the adopt script and the unit that runs it (a daemon-reload, no restart).
+%.mcpstage:
+	@set -e; \
+	c="$*-web"; \
+	case "$*" in *-stg.*|stg.*) echo "$$c: staging container (no MCP); skipped."; exit 0 ;; esac; \
+	d=$$(sh scripts/names3.sh $* | cut -d' ' -f3); \
+	if podman container exists $$d-web; then \
+	    echo "$$c is the production container of a create3 set; using its dev container $$d-web."; \
+	    c="$$d-web"; \
+	fi; \
+	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
+	bin=$$(mktemp); trap 'rm -f "$$bin"' EXIT; \
+	: 'Build BEFORE touching the container, so a compile error changes nothing.'; \
+	(cd container/mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$$(sha256sum main.go | cut -c1-12)" -o "$$bin" .); \
+	new=$$("$$bin" -version | sed 's/^vps-mcp //'); \
+	podman exec $$c mkdir -p /var/lib/vps-mcp/incoming /usr/local/libexec; \
+	podman cp container/systemd/vps-mcp-adopt.sh $$c:/usr/local/libexec/vps-mcp-adopt.sh; \
+	podman exec $$c chmod 755 /usr/local/libexec/vps-mcp-adopt.sh; \
+	if ! podman exec $$c cmp -s /etc/systemd/system/mcp-server.service - < container/systemd/mcp-server.service; then \
+	    podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
+	    podman exec $$c systemctl daemon-reload; \
+	fi; \
+	: 'Compare identities; never run the live binary (pre -version builds would serve).'; \
+	cur=$$(podman exec $$c cat /opt/mcp/vps-mcp.ident 2>/dev/null || true); \
+	stg=$$(podman exec $$c timeout 10 /var/lib/vps-mcp/incoming/vps-mcp -version 2>/dev/null | sed -n 's/^vps-mcp //p' || true); \
+	if [ "$$new" = "$$cur" ]; then \
+	    podman exec $$c rm -f /var/lib/vps-mcp/incoming/vps-mcp /var/lib/vps-mcp/incoming/main.go; \
+	    echo "    $$c: up to date ($$new)"; \
+	elif [ "$$new" = "$$stg" ]; then \
+	    echo "    $$c: already staged ($$new)"; \
+	else \
+	    podman cp container/mcp/main.go $$c:/var/lib/vps-mcp/incoming/main.go; \
+	    podman cp "$$bin" $$c:/var/lib/vps-mcp/incoming/vps-mcp.tmp; \
+	    podman exec $$c sh -c 'chmod 755 /var/lib/vps-mcp/incoming/vps-mcp.tmp && mv -f /var/lib/vps-mcp/incoming/vps-mcp.tmp /var/lib/vps-mcp/incoming/vps-mcp'; \
+	    echo "    $$c: staged $$new (running: $${cur:-unidentified}; adopted at the next mcp-server start)"; \
+	fi
+
+# Update one running container now: stage, then restart mcp-server so it
+# adopts the staged binary immediately (vps-mcp-adopt.sh logs the change in
+# the container's journal; this target logs why it restarted). Also drops
+# Node.js-era leftovers. The Bearer hash in /etc/mcp-server is untouched, so
+# connected clients need no new login. Stem is the hostname:
 #   make test.example.org.mcpupdate   → test.example.org-web
 #   make oauth.example.org.mcpupdate  → oauth.example.org-web
-%.mcpupdate:
+%.mcpupdate: %.mcpstage
 	@set -e; \
 	c="$*-web"; \
 	case "$*" in *-stg.*|stg.*) echo "$$c: staging container (no MCP); skipped."; exit 0 ;; esac; \
@@ -873,20 +951,9 @@ checkall:
 	fi; \
 	podman container exists $$c || { echo "Error: container $$c not found."; exit 1; }; \
 	echo "==> updating $$c"; \
-	bin=$$(mktemp); trap 'rm -f "$$bin"' EXIT; \
-	: 'Build BEFORE touching the container, so a compile error leaves the old server running.'; \
-	(cd container/mcp && HOME=$${HOME:-/root} CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w -X main.sourceHash=$$(sha256sum main.go | cut -c1-12)" -o "$$bin" .); \
-	new=$$("$$bin" -version | sed 's/^vps-mcp //'); \
-	old=$$(podman exec $$c sh -c 'if [ -e /opt/mcp/index.mjs ]; then echo node.js; elif [ -e /opt/mcp/main.go ]; then echo "source $$(sha256sum /opt/mcp/main.go | cut -c1-12)"; else echo none; fi'); \
-	podman cp "$$bin" $$c:/opt/mcp/vps-mcp.new; \
-	podman cp container/mcp/main.go $$c:/opt/mcp/main.go; \
-	podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
-	: 'Atomic rename, drop Node.js-era leftovers, restart. The Bearer hash in'; \
-	: '/etc/mcp-server is untouched, so connected clients need no new login.'; \
-	podman exec $$c sh -c 'chmod 755 /opt/mcp/vps-mcp.new && mv -f /opt/mcp/vps-mcp.new /opt/mcp/vps-mcp && \
-	    cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules .npmci.* && \
-	    systemctl daemon-reload && systemctl restart mcp-server'; \
-	podman exec $$c logger -t vps-mcp-update "host maintenance: replaced /opt/mcp/vps-mcp ($$old -> $$new) and restarted mcp-server; run by 'make $(VPS_MCP_GOAL)' on the host"; \
+	podman exec $$c sh -c 'cd /opt/mcp && rm -rf index.mjs package.json package-lock.json node_modules .npmci.*'; \
+	podman exec $$c logger -t vps-mcp-update "host maintenance: restarting mcp-server to adopt the staged MCP server binary; run by 'make $(VPS_MCP_GOAL)' on the host"; \
+	podman exec $$c systemctl restart mcp-server; \
 	sh scripts/ensure-tools.sh $$c; \
 	echo "    $$c updated"; \
 	: 'Called directly (not from mcpupdate): the scripts of the whole set too.'; \
