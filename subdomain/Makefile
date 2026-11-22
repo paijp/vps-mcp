@@ -20,7 +20,7 @@ email_of  = $(word 2,$(subst __, ,$(1)))
 # targets (sub-makes inherit it through the environment).
 export VPS_MCP_GOAL ?= $(MAKECMDGOALS)
 
-.PHONY: help image install-binaries install-services list mcpupdate check checkall updatehost updateall mcpstage hostcheck
+.PHONY: help image install-binaries install-services list mcpupdate check checkall updatehost updateall mcpstage autostage hostcheck
 
 # ── help ──────────────────────────────────────────────────────────────────────
 
@@ -45,6 +45,7 @@ help:
 	@printf "  make image                Rebuild the image (affects ONLY containers created later)\n"
 	@printf "  make mcpstage             Stage a new build in ALL running containers; each adopts it at its\n"
 	@printf "                            next mcp-server start (weekly reboot at the latest), no restart now\n"
+	@printf "  make autostage            Run mcpstage daily from this checkout (timer; never pulls)\n"
 	@printf "  make mcpupdate            Update ALL running containers in place (go build + cp + restart,\n"
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
 	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
@@ -377,6 +378,16 @@ list:
 # container first (make oauth.mcpupdate) so /mcp/resolve returns owner_id before
 # the others try to bind it.
 
+# Opt-in: run mcpstage daily (vps-mcp-mcpstage.timer) from THIS checkout, so a
+# golang update reaches each container at its next mcp-server start (the
+# weekly reboot at the latest) without anyone running make. Never pulls.
+autostage:
+	sed 's|__DIR__|$(CURDIR)|' host/systemd/vps-mcp-mcpstage.service > /etc/systemd/system/vps-mcp-mcpstage.service
+	install -m 644 host/systemd/vps-mcp-mcpstage.timer /etc/systemd/system/
+	systemctl daemon-reload
+	systemctl enable --now vps-mcp-mcpstage.timer
+	@printf "autostage: daily stage check from $(CURDIR) enabled (systemctl list-timers vps-mcp-mcpstage.timer).\n"
+
 # Stage a new build in every running container (no restart; adopted at each
 # container's next mcp-server start, at the weekly reboot at the latest).
 mcpstage:
@@ -461,10 +472,20 @@ checkall:
 	    podman cp container/systemd/mcp-server.service $$c:/etc/systemd/system/mcp-server.service; \
 	    podman exec $$c systemctl daemon-reload; \
 	fi; \
-	podman cp container/mcp/main.go $$c:/var/lib/vps-mcp/incoming/main.go; \
-	podman cp "$$bin" $$c:/var/lib/vps-mcp/incoming/vps-mcp.tmp; \
-	podman exec $$c sh -c 'chmod 755 /var/lib/vps-mcp/incoming/vps-mcp.tmp && mv -f /var/lib/vps-mcp/incoming/vps-mcp.tmp /var/lib/vps-mcp/incoming/vps-mcp'; \
-	echo "    $$c: staged $$new (adopted at the next mcp-server start)"
+	: 'Compare identities; never run the live binary (pre -version builds would serve).'; \
+	cur=$$(podman exec $$c cat /opt/mcp/vps-mcp.ident 2>/dev/null || true); \
+	stg=$$(podman exec $$c timeout 10 /var/lib/vps-mcp/incoming/vps-mcp -version 2>/dev/null | sed -n 's/^vps-mcp //p' || true); \
+	if [ "$$new" = "$$cur" ]; then \
+	    podman exec $$c rm -f /var/lib/vps-mcp/incoming/vps-mcp /var/lib/vps-mcp/incoming/main.go; \
+	    echo "    $$c: up to date ($$new)"; \
+	elif [ "$$new" = "$$stg" ]; then \
+	    echo "    $$c: already staged ($$new)"; \
+	else \
+	    podman cp container/mcp/main.go $$c:/var/lib/vps-mcp/incoming/main.go; \
+	    podman cp "$$bin" $$c:/var/lib/vps-mcp/incoming/vps-mcp.tmp; \
+	    podman exec $$c sh -c 'chmod 755 /var/lib/vps-mcp/incoming/vps-mcp.tmp && mv -f /var/lib/vps-mcp/incoming/vps-mcp.tmp /var/lib/vps-mcp/incoming/vps-mcp'; \
+	    echo "    $$c: staged $$new (running: $${cur:-unidentified}; adopted at the next mcp-server start)"; \
+	fi
 
 # Update one running container now: stage, then restart mcp-server so it
 # adopts the staged binary immediately (vps-mcp-adopt.sh logs the change in
