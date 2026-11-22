@@ -292,7 +292,13 @@ if command -v podman >/dev/null 2>&1; then
         sub=$(podman exec "$c" sed -n 's/^SUBDOMAIN=//p' /etc/vps-mcp-env 2>/dev/null)
         [ -n "$sub" ] || echo "NOTE     $c: SUBDOMAIN unknown (/etc/vps-mcp-env unreadable); server_name diff may be noisy"
 
-        check_in_container "$c" container/mcp/main.go               /opt/mcp/main.go
+        # While a build is staged, the repo source should match the staged copy
+        # (the live one is replaced at the next mcp-server start).
+        if podman exec "$c" test -e /var/lib/vps-mcp/incoming/main.go 2>/dev/null; then
+            check_in_container "$c" container/mcp/main.go /var/lib/vps-mcp/incoming/main.go
+        else
+            check_in_container "$c" container/mcp/main.go /opt/mcp/main.go
+        fi
         check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
         check_in_container "$c" container/systemd/vps-mcp-init.sh   /usr/local/bin/vps-mcp-init.sh
         check_in_container "$c" container/systemd/certbot-deploy.sh /usr/local/bin/certbot-deploy.sh

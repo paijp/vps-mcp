@@ -337,7 +337,13 @@ if command -v podman >/dev/null 2>&1; then
         # have none, and mcpupdate/mcpstage never touch them). /opt/mcp/main.go
         # follows the running binary, so it differs while a build is staged.
         if [ "$role" != stg ] && [ "$role" != prod ]; then
-            check_in_container "$c" container/mcp/main.go               /opt/mcp/main.go
+            # While a build is staged, the repo source should match the staged copy
+            # (the live one is replaced at the next mcp-server start).
+            if podman exec "$c" test -e /var/lib/vps-mcp/incoming/main.go 2>/dev/null; then
+                check_in_container "$c" container/mcp/main.go /var/lib/vps-mcp/incoming/main.go
+            else
+                check_in_container "$c" container/mcp/main.go /opt/mcp/main.go
+            fi
             check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
             check_in_container "$c" container/systemd/vps-mcp-adopt.sh /usr/local/libexec/vps-mcp-adopt.sh
             # What runs vs. what waits in the inbox for the next mcp-server start.
