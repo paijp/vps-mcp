@@ -313,8 +313,6 @@ if command -v podman >/dev/null 2>&1; then
         sub=$(podman exec "$c" sed -n 's/^SUBDOMAIN=//p' /etc/vps-mcp-env 2>/dev/null)
         [ -n "$sub" ] || echo "NOTE     $c: SUBDOMAIN unknown (/etc/vps-mcp-env unreadable); server_name diff may be noisy"
 
-        check_in_container "$c" container/mcp/main.go               /opt/mcp/main.go
-        check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
         check_in_container "$c" container/systemd/vps-mcp-init.sh   /usr/local/bin/vps-mcp-init.sh
         check_in_container "$c" container/systemd/certbot-deploy.sh /usr/local/bin/certbot-deploy.sh
         # nginx configs use "orig" mode: operators are expected to add their own
@@ -335,7 +333,12 @@ if command -v podman >/dev/null 2>&1; then
         else
             echo "NOTE     $c: old nginx layout (no /etc/nginx/mcp.d, app.d)"
         fi
+        # MCP files: only where an MCP server runs (create3 staging/production
+        # have none, and mcpupdate/mcpstage never touch them). /opt/mcp/main.go
+        # follows the running binary, so it differs while a build is staged.
         if [ "$role" != stg ] && [ "$role" != prod ]; then
+            check_in_container "$c" container/mcp/main.go               /opt/mcp/main.go
+            check_in_container "$c" container/systemd/mcp-server.service /etc/systemd/system/mcp-server.service
             check_in_container "$c" container/systemd/vps-mcp-adopt.sh /usr/local/libexec/vps-mcp-adopt.sh
             # What runs vs. what waits in the inbox for the next mcp-server start.
             run=$(podman exec "$c" cat /opt/mcp/vps-mcp.ident 2>/dev/null)
