@@ -173,12 +173,17 @@ help:
 	    systemctl enable --now dnf-automatic.timer; \
 	    systemctl disable --now dnf-makecache.timer 2>/dev/null || true; \
 	fi
+	# The Go MCP server is a static binary, so a golang (standard library)
+	# update reaches it only through a rebuild: autostage is its counterpart of
+	# dnf-automatic (daily rebuild/stage from this checkout; adopted at the
+	# next mcp-server start, the weekly reboot at the latest).
+	$(MAKE) --no-print-directory autostage
 	# Persistent journal: without /var/log/journal the host journal lives in
 	# tmpfs and is lost on reboot, making incidents (OOM, swap thrash)
 	# undiagnosable after the fact.
 	mkdir -p /var/log/journal
 	systemctl restart systemd-journald
-	# zram swap: dnf-automatic and Node.js are memory-hungry; on a small host
+	# zram swap: dnf-automatic and Go builds are memory-hungry; on a small host
 	# they can push the machine into disk-swap thrash (CPU + I/O pinned, SSH
 	# dead). Compressed in-RAM swap absorbs those spikes far more gracefully than
 	# the on-disk /swapfile above.

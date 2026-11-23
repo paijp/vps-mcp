@@ -50,7 +50,7 @@ help:
 	@printf "                            plus any missing diagnostic tools: ss, ps, lsof, sqlite3, jq)\n"
 	@printf "  make alice.mcpupdate      Update a single running container (stem -> <stem>-web)\n"
 	@printf "      Run BOTH 'make image' and 'make mcpupdate' to cover future and existing containers.\n\n"
-	@printf "  make updatehost           install-binaries + install-services + image (host side, in place)\n"
+	@printf "  make updatehost           install-binaries + install-services + image + autostage (in place)\n"
 	@printf "  make updateall            updatehost + mcpupdate (also every running MCP container)\n\n"
 	@printf "Refresh the MCP app's pinned dependencies (supply-chain safe):\n"
 	@printf "Read-only health/security check of this host and its containers:\n"
@@ -180,6 +180,11 @@ help:
 	    systemctl enable --now dnf-automatic.timer; \
 	    systemctl disable --now dnf-makecache.timer 2>/dev/null || true; \
 	fi
+	# The Go MCP server is a static binary, so a golang (standard library)
+	# update reaches it only through a rebuild: autostage is its counterpart of
+	# dnf-automatic (daily rebuild/stage from this checkout; adopted at the
+	# next mcp-server start, the weekly reboot at the latest).
+	$(MAKE) --no-print-directory autostage
 	# Persistent journal: without /var/log/journal the host journal lives in
 	# tmpfs and is lost on reboot, making incidents (OOM, swap thrash)
 	# undiagnosable after the fact.
@@ -424,7 +429,7 @@ hostcheck:
 	@bash scripts/host-check.sh
 
 # Bring an installed host up to date with this checkout, in place:
-#   updatehost   install-binaries + install-services + image
+#   updatehost   install-binaries + install-services + image + autostage
 #                (host binaries, systemd units / nftables / postfix policy,
 #                 and the image used for containers created from now on)
 #   updateall    updatehost + mcpupdate (also every running MCP container)
@@ -432,7 +437,7 @@ hostcheck:
 # proxies' listening sockets are held by systemd, mcpupdate keeps the Bearer
 # hash). Files these targets install are overwritten with the repo version,
 # so local edits to them are lost — `make check` first shows any drift.
-updatehost: install-binaries install-services image
+updatehost: install-binaries install-services image autostage
 
 updateall: updatehost
 	$(MAKE) --no-print-directory mcpupdate
